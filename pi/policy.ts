@@ -6,10 +6,9 @@ import type { Policy } from "../src/contracts.ts";
 
 export const defaultPolicy: Policy = {
   model: "jev-1.13.0",
-  budget: { sessionTokens: 1000000, dayTokens: 5000000, requestTokens: 65536 },
-  autopilot: { skills: true, models: "suggest", tools: true, threshold: 0.8 },
+  autopilot: { skills: true, models: "suggest", tools: false, threshold: 0.8 },
   recovery: {
-    mode: "steer",
+    mode: "shadow",
     retryConcern: 0.85,
     userConcern: 0.9,
     cooldownTurns: 3,
@@ -60,14 +59,6 @@ const model = Type.Object(
 const schema = Type.Object(
   {
     model: text,
-    budget: Type.Object(
-      {
-        sessionTokens: Type.Integer({ minimum: 1, maximum: 1000000000 }),
-        dayTokens: Type.Integer({ minimum: 1, maximum: 1000000000 }),
-        requestTokens: Type.Integer({ minimum: 4096, maximum: 65536 }),
-      },
-      { additionalProperties: false },
-    ),
     autopilot: Type.Object(
       {
         skills: Type.Boolean(),
@@ -163,11 +154,14 @@ export async function loadPolicy(root: string): Promise<Policy> {
   }
   if (!input || typeof input !== "object" || Array.isArray(input))
     throw new Error("Invalid jevons.json.");
+  if (Object.hasOwn(input, "budget"))
+    throw new Error(
+      "Token budgets were removed. Remove budget from jevons.json; /jevons usage shows reported tokens without spending limits.",
+    );
   const raw = input as Partial<Policy>;
   const policy = {
     ...defaultPolicy,
     ...raw,
-    budget: { ...defaultPolicy.budget, ...raw.budget },
     autopilot: { ...defaultPolicy.autopilot, ...raw.autopilot },
     review: { ...defaultPolicy.review, ...raw.review },
     recovery: { ...defaultPolicy.recovery, ...raw.recovery },

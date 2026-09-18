@@ -278,13 +278,11 @@ export async function reviewDiff(
             status: answer.noul >= concern ? "concern" : "uncertain",
           });
       }
-    } catch (error) {
+    } catch {
       report.omitted.push(
         bounded.aborted
           ? "Review cancelled or deadline exceeded; remaining chunks not assessed."
-          : error instanceof Error && /budget|reservation/i.test(error.message)
-            ? "Token budget stopped review; remaining chunks not assessed."
-            : "Evaluation unavailable or invalid; remaining chunks not assessed.",
+          : "Evaluation unavailable or invalid; remaining chunks not assessed.",
       );
       stopped = true;
     }

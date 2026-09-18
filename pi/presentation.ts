@@ -9,6 +9,7 @@ import type {
 import type { DiffReport } from "../src/diff-review.ts";
 import type { Receipt } from "./service.ts";
 import type { AuthoredQuestions } from "./author.ts";
+import type { VerificationRun } from "./verify.ts";
 
 export function safeText(text: string): string {
   return text.replace(
@@ -352,6 +353,41 @@ export function formatRecoveryDetails(details: RecoveryDetails): string {
   ].join("\n\n");
 }
 
+export function formatVerificationDetails(run: VerificationRun): string {
+  return [
+    `Verification: ${label(run.status)} · observed ${new Date(run.observedAt).toISOString()}`,
+    `Snapshot: ${label(run.fingerprint ?? "unavailable")} · task revision ${run.taskRevision}`,
+    `Comparison: ${label(run.comparison ?? "unavailable")}`,
+    section(
+      "Configured checks",
+      run.selection.selections
+        .map(
+          (check) =>
+            `${label(check.name)}: ${check.selected ? "selected" : "not run"} · ${label(check.reason)}${check.probability === undefined ? "" : ` · relevance P(true) = ${check.probability}`}`,
+        )
+        .join("\n"),
+    ),
+    section(
+      "Execution observations",
+      run.results
+        .map((result) =>
+          [
+            `${label(result.name)}: ${result.passed ? "passed" : "FAILED"} · exit ${result.exitCode ?? "unknown"} · ${result.termination} · ${result.elapsedMs}ms`,
+            `Output (${result.omittedBytes} bytes omitted):\n${indent(result.output || "No output.")}`,
+          ].join("\n"),
+        )
+        .join("\n\n") || "No checks executed; no verification established.",
+    ),
+    section(
+      "Selection judgments",
+      run.selection.evaluations.map(jevDetails).join("\n") ||
+        "No model judgment required or available.",
+    ),
+    section("Omissions", run.omitted.join("\n") || "None reported."),
+    "Historical execution observations, not proof of current correctness. Jev selects relevance; exit status determines check success.",
+  ].join("\n\n");
+}
+
 function messageDetails(details: unknown): string {
   if (!details) return "Details: not retained.";
   if (Array.isArray(details))
@@ -361,6 +397,8 @@ function messageDetails(details: unknown): string {
         .join("\n\n") || "No receipts on this page."
     );
   if (typeof details === "object") {
+    if ("selection" in details && "results" in details)
+      return formatVerificationDetails(details as VerificationRun);
     if ("reviewedChunks" in details)
       return formatReviewDetails(details as DiffReport);
     if (

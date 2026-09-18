@@ -1,6 +1,8 @@
 node_modules/
 .devenv/
 .direnv/
-.jevons/
+.env
+.env.*
+!.env.example
 result
 *.tgz

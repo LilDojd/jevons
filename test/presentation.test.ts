@@ -208,7 +208,7 @@ test("terminal controls and bidi overrides are escaped without losing ordinary m
 const receipt: Receipt = {
   purpose: "Decision",
   status: "completed",
-  accounting: "settled",
+  accounting: "reported",
   ...evaluation,
 };
 
@@ -232,7 +232,7 @@ test("source-free receipt allowlist never renders attached request or writer sou
   contains(text, [
     evaluation.model,
     "0.8123456789012345",
-    "settled",
+    "reported",
     "103 input",
     "29 output",
     "Source-free",

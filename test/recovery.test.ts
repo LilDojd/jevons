@@ -85,6 +85,7 @@ function fixture(evaluate: Evaluate = async () => judgment()) {
       return evaluate(request, signal);
     },
   } as unknown as Runtime;
+  runtime.policy!.recovery.mode = "steer";
   registerRecovery(pi, runtime);
   const emit = async (name: string, event: Record<string, unknown> = {}) => {
     let result: unknown;

@@ -89,7 +89,6 @@ export interface CheckConfig {
 
 export interface Policy {
   model: string;
-  budget: { sessionTokens: number; dayTokens: number; requestTokens: number };
   autopilot: {
     skills: boolean;
     models: "off" | "suggest" | "switch";

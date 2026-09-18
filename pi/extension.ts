@@ -8,6 +8,8 @@ import { Runtime } from "./runtime.ts";
 import { registerAutopilot } from "./autopilot.ts";
 import { registerRecovery } from "./recovery.ts";
 import { registerContinuity } from "./continuity.ts";
+import { registerInvestigation } from "./investigation.ts";
+import { verifyConfigured, formatVerification } from "./verify.ts";
 import {
   registerPresentation,
   formatEvaluation,
@@ -20,7 +22,6 @@ import { authorQuestions } from "./author.ts";
 import type { AuthoredQuestions } from "./author.ts";
 import { collectLocalDiff, collectPullRequestDiff } from "./diff.ts";
 import { reviewDiff, formatDiffReview } from "../src/diff-review.ts";
-import { runChecks } from "../src/checks.ts";
 import type { Request } from "../src/contracts.ts";
 import type { DecisionDetails } from "./presentation.ts";
 import type { DiffReport } from "../src/diff-review.ts";
@@ -31,6 +32,7 @@ export default function extension(pi: ExtensionAPI): void {
   registerContinuity(pi, runtime);
   registerAutopilot(pi, runtime);
   registerRecovery(pi, runtime);
+  const investigate = registerInvestigation(pi, runtime);
   const completedWriters = new Map<
     string,
     Omit<AuthoredQuestions, "questions">
@@ -42,31 +44,19 @@ export default function extension(pi: ExtensionAPI): void {
     if (writer && event.isError)
       return { usage: writer.usage, details: { writer, status: "failed" } };
   });
-  pi.registerFlag("jevons", {
-    type: "boolean",
-    default: false,
-    description:
-      "Enable Jevons sharing and configured automation for this session",
-  });
-  pi.on("session_start", async (event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
     completedWriters.clear();
     runtime.pause(ctx);
     runtime.sessionId = ctx.sessionManager.getSessionId();
     runtime.edits.clear();
     runtime.restoreTask(ctx);
     runtime.failures = 0;
-    runtime.usage = undefined;
     runtime.jev = undefined;
-    if (
-      pi.getFlag("jevons") &&
-      (event.reason === "startup" || event.reason === "reload")
-    ) {
-      try {
-        await runtime.enable(ctx, true);
-      } catch (error) {
-        if (ctx.hasUI) ctx.ui.notify(String(error), "error");
-      }
-    } else runtime.status(ctx);
+    try {
+      await runtime.enable(ctx, true);
+    } catch (error) {
+      if (ctx.hasUI) ctx.ui.notify(safeText(String(error)), "error");
+    }
   });
   pi.on("session_shutdown", (_event, ctx) => runtime.pause(ctx));
   pi.on("session_before_switch", (_event, ctx) => runtime.pause(ctx));
@@ -132,7 +122,8 @@ export default function extension(pi: ExtensionAPI): void {
       return;
     reviewing = true;
     try {
-      const report = await review(ctx, [...runtime.edits]);
+      const paths = [...runtime.edits];
+      const report = await review(ctx, paths);
       pi.sendMessage(
         {
           customType: "jevons",
@@ -141,6 +132,9 @@ export default function extension(pi: ExtensionAPI): void {
           details: report,
         },
         { triggerTurn: false },
+      );
+      await investigate(report, ctx, () =>
+        collectLocalDiff(ctx.cwd, paths, runtime.controller.signal),
       );
     } catch (error) {
       if (runtime.active && ctx.hasUI)
@@ -322,15 +316,18 @@ export default function extension(pi: ExtensionAPI): void {
             );
             return;
           }
-          action = await ctx.ui.select("Jevons", [
-            runtime.active ? "pause" : "on",
-            "ask",
-            "review",
-            "gate",
-            "usage",
-            "activity",
-            "settings",
-          ]);
+          const choices = [
+            runtime.active
+              ? "pause — Stop sharing and automation"
+              : "on — Enable sharing and automation",
+            "ask — Ask a focused question with explicit context",
+            "review — Review changed code; never approves merging",
+            "gate — Select checks, confirm execution, then review",
+            "usage — Session token totals; no spending caps",
+            "activity — Recent requests, models and token usage",
+            "settings — Inspect project policy",
+          ];
+          action = (await ctx.ui.select("Jevons", choices))?.split(" — ")[0];
         }
         if (!action) return;
         if (action === "on") {
@@ -349,30 +346,36 @@ export default function extension(pi: ExtensionAPI): void {
           return;
         }
         if (action === "usage") {
-          if (!runtime.jev || !runtime.policy) {
-            show("Enable Jevons to open this session’s budget.");
-            return;
-          }
-          const usage = await runtime.jev.budget.usage();
+          const usage = runtime.usageSummary(ctx);
           show(
-            `Tokens including reservations: ${usage.session}/${runtime.policy.budget.sessionTokens} session · ${usage.day}/${runtime.policy.budget.dayTokens} UTC day · ${usage.pending} unresolved requests`,
+            [
+              `Jev usage · ${usage.calls} requests · ${(usage.input + usage.output).toLocaleString()} reported tokens`,
+              `${usage.input.toLocaleString()} input · ${usage.output.toLocaleString()} output · ${usage.failed} failed/cancelled · ${usage.unknown} unknown usage`,
+              "All branches of this Pi session. Unknown usage is not zero. No spending caps or project ledger.",
+              "Question-writer usage is separate and appears in decision details; coding-model usage stays in Pi.",
+            ].join("\n"),
           );
           return;
         }
         if (action === "activity") {
           const receipts = ctx.sessionManager
-            .getBranch()
+            .getEntries()
             .filter(
               (entry) =>
                 entry.type === "custom" &&
                 entry.customType === "jevons.receipt",
-            );
+            )
+            .reverse();
           const page = Number(args[0] ?? "1");
           if (!Number.isSafeInteger(page) || page < 1)
             throw new Error("Use /jevons activity PAGE, starting at 1.");
           const pages = Math.max(1, Math.ceil(receipts.length / 20));
+          if (page > pages)
+            throw new Error(
+              `Only ${pages} activity pages; use /jevons activity 1 for the latest.`,
+            );
           show(
-            `${receipts.length} receipts · page ${page}/${pages}. Expand for details; /jevons activity ${page + 1} for the next page.`,
+            `${receipts.length} session receipts · newest first · page ${page}/${pages}. Expand for details.${page < pages ? ` /jevons activity ${page + 1} for older requests.` : ""}`,
             receipts
               .slice((page - 1) * 20, page * 20)
               .map((entry) => (entry.type === "custom" ? entry.data : null)),
@@ -444,41 +447,11 @@ export default function extension(pi: ExtensionAPI): void {
             return;
           }
           if (action === "gate") {
-            const configured = structuredClone(runtime.policy!.checks);
-            if (!configured.length)
-              throw new Error(
-                "No executable checks configured in jevons.json.",
-              );
-            if (
-              !ctx.hasUI ||
-              !(await ctx.ui.confirm(
-                "Run configured checks?",
-                configured
-                  .map((check) => `${check.name}: ${check.argv.join(" ")}`)
-                  .join("\n"),
-                { signal: lifetime },
-              ))
-            )
-              return;
-            lifetime.throwIfAborted();
-            if (!runtime.active) throw new Error("Jevons is paused.");
-            const checks = await runChecks(ctx.cwd, configured, lifetime);
-            lifetime.throwIfAborted();
-            pi.appendEntry("jevons.checks", {
-              results: checks,
-              revision: `session-entry:${ctx.sessionManager.getLeafId() ?? "unknown"}`,
-              taskRevision: runtime.taskRevision,
-              observedAt: Date.now(),
-            });
-            show(
-              checks
-                .map(
-                  (check) =>
-                    `${check.name}: ${check.passed ? "passed" : "failed"}`,
-                )
-                .join("\n"),
-            );
-            if (checks.some((check) => !check.passed)) return;
+            const verification = await verifyConfigured(ctx, runtime);
+            if (!verification) return;
+            pi.appendEntry("jevons.checks", verification);
+            show(formatVerification(verification), verification);
+            if (verification.status !== "passed" || !runtime.active) return;
           }
           const report = await review(ctx, args, lifetime);
           show(formatDiffReview(report), report);

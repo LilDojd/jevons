@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import type { Fetch } from "@typesafe-ai/sdk";
-import { Budget } from "../src/budget.ts";
 import type { Answer, Evaluation, Request } from "../src/contracts.ts";
 import { parseRequest } from "./schema.ts";
 
@@ -11,7 +10,7 @@ export interface Receipt {
   elapsedMs: number;
   usage?: Evaluation["usage"];
   answers?: Record<string, Answer>;
-  accounting: "reserved" | "settled" | "released" | "overrun";
+  accounting: "reported" | "unknown" | "not-dispatched";
   status: "completed" | "cancelled" | "failed";
 }
 
@@ -52,20 +51,17 @@ function object(value: unknown): value is Record<string, unknown> {
 
 export class Jev {
   readonly client: TypeSafeClient;
-  readonly budget: Budget;
   readonly model: string;
   readonly record: (receipt: Receipt) => void;
   private readonly attempts = new AsyncLocalStorage<{ dispatched: boolean }>();
 
   constructor(options: {
-    budget: Budget;
     model: string;
     record: (receipt: Receipt) => void;
     apiKey?: string;
     fetch?: Fetch;
   }) {
     if (!modelName(options.model)) throw new Error("Invalid Jev model name.");
-    this.budget = options.budget;
     this.model = options.model;
     this.record = options.record;
     const transport = options.fetch ?? globalThis.fetch;
@@ -80,7 +76,8 @@ export class Jev {
         const signal = init?.signal ?? undefined;
         const response = await abortable(async () => {
           const attempt = this.attempts.getStore();
-          if (!attempt) throw new Error("Jev request has no reservation.");
+          if (!attempt || attempt.dispatched)
+            throw new Error("Jev request is outside its single dispatch.");
           attempt.dispatched = true;
           const response = await transport(url, { ...init, redirect: "error" });
           if (signal?.aborted) {
@@ -125,34 +122,11 @@ export class Jev {
   ): Promise<Evaluation> {
     signal?.throwIfAborted();
     const request = parseRequest(input);
-    const bytes = Buffer.byteLength(JSON.stringify(request));
-    const outputAllowance = Object.values(request.questions).reduce(
-      (sum, question) => {
-        const labels =
-          question.type === "choice"
-            ? Object.keys(question.criteria)
-            : question.type === "score"
-              ? question.criteria.map((_, index) => String(index))
-              : [];
-        return (
-          sum +
-          64 +
-          labels.length * 32 +
-          Buffer.byteLength(JSON.stringify(labels))
-        );
-      },
-      1024,
-    );
-    if (bytes + outputAllowance > this.budget.limits.requestTokens)
-      throw new Error(
-        "Conservative request estimate exceeds its token reservation; narrow the context or raise requestTokens.",
-      );
-    const reservation = await this.budget.reserve(signal);
     const started = Date.now();
     let usage: Evaluation["usage"] | undefined;
     let model = this.model;
     const attempt = { dispatched: false };
-    let accounting: Receipt["accounting"] = "reserved";
+    let accounting: Receipt["accounting"] = "not-dispatched";
     try {
       signal?.throwIfAborted();
       const result = await this.attempts.run(attempt, () =>
@@ -177,11 +151,7 @@ export class Jev {
         input_tokens: billed.input_tokens,
         output_tokens: billed.output_tokens,
       };
-      const tokens = usage.input_tokens + usage.output_tokens;
-      await this.budget.settle(reservation, tokens);
-      accounting =
-        tokens > this.budget.limits.requestTokens ? "overrun" : "settled";
-      if (accounting === "overrun") throw new Error("Reservation exceeded.");
+      accounting = "reported";
       signal?.throwIfAborted();
       if (
         !validModel ||
@@ -276,12 +246,8 @@ export class Jev {
       this.receipt({ purpose, ...evaluation, accounting, status: "completed" });
       return evaluation;
     } catch {
-      if (!attempt.dispatched) {
-        try {
-          await this.budget.settle(reservation, 0);
-          accounting = "released";
-        } catch {}
-      }
+      if (!usage)
+        accounting = attempt.dispatched ? "unknown" : "not-dispatched";
       this.receipt({
         purpose,
         model,
@@ -293,9 +259,7 @@ export class Jev {
       throw new Error(
         signal?.aborted
           ? "Jev cancelled."
-          : accounting === "overrun"
-            ? "Jev usage exceeded its request reservation; budget paused."
-            : "Jev request failed. Unsettled usage remains reserved; no retry was sent.",
+          : "Jev request failed; no retry was sent.",
       );
     }
   }

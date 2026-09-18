@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -43,7 +43,15 @@ async function fixture(t: TestContext, fetch: typeof globalThis.fetch) {
     cwd: root,
     hasUI: false,
     isProjectTrusted: () => true,
-    sessionManager: { getSessionId: () => "runtime-session" },
+    sessionManager: {
+      getSessionId: () => "runtime-session",
+      getEntries: () =>
+        receipts.map((data) => ({
+          type: "custom",
+          customType: "jevons.receipt",
+          data,
+        })),
+    },
   } as unknown as ExtensionContext;
   t.after(() => runtime.pause(ctx));
   return { root, runtime, ctx, receipts };
@@ -80,6 +88,85 @@ test("task restoration reads only delivered user entries on the current branch",
   assert.equal(runtime.taskOmitted, false);
   runtime.deliveredUser("Image constraint", true);
   assert.equal(runtime.taskOmitted, true);
+});
+
+test("usage restores historical and current receipts across branches without network", () => {
+  const runtime = new Runtime({} as ExtensionAPI);
+  const receipt = (data: unknown) => ({
+    type: "custom",
+    customType: "jevons.receipt",
+    data,
+  });
+  const entries: unknown[] = [
+    receipt({
+      status: "completed",
+      accounting: "settled",
+      usage: { input_tokens: 10, output_tokens: 2 },
+    }),
+    receipt({
+      status: "failed",
+      accounting: "overrun",
+      usage: { input_tokens: 100, output_tokens: 3 },
+    }),
+    receipt({ status: "failed", accounting: "reserved" }),
+    receipt({ status: "cancelled", accounting: "released" }),
+    receipt({
+      status: "completed",
+      accounting: "reported",
+      usage: { input_tokens: 0, output_tokens: 0 },
+    }),
+    receipt({ status: "cancelled", accounting: "unknown" }),
+    receipt({ status: "failed", accounting: "not-dispatched" }),
+    receipt({
+      status: "failed",
+      accounting: "reported",
+      usage: { input_tokens: -1, output_tokens: 2 },
+    }),
+    receipt(null),
+    receipt({ private: "not usage" }),
+    {
+      type: "custom",
+      customType: "other",
+      data: {
+        status: "completed",
+        usage: { input_tokens: 999, output_tokens: 999 },
+      },
+    },
+  ];
+  const ctx = {
+    sessionManager: { getEntries: () => entries, getBranch: () => [] },
+  } as unknown as ExtensionContext;
+  const expected = { input: 110, output: 5, calls: 6, unknown: 3, failed: 6 };
+  assert.deepEqual(runtime.usageSummary(ctx), expected);
+  assert.deepEqual(runtime.usageSummary(ctx), expected);
+  entries.length = 0;
+  assert.deepEqual(runtime.usageSummary(ctx), {
+    input: 0,
+    output: 0,
+    calls: 0,
+    unknown: 0,
+    failed: 0,
+  });
+});
+
+test("network requires trusted project and explicit consent", async (t) => {
+  let calls = 0;
+  const { runtime, ctx } = await fixture(t, async () => {
+    calls++;
+    return response();
+  });
+  await assert.rejects(
+    runtime.enable({ ...ctx, isProjectTrusted: () => false }, true),
+    /Trust/,
+  );
+  await assert.rejects(runtime.enable(ctx));
+  await runtime.enable({
+    ...ctx,
+    hasUI: true,
+    ui: { confirm: async () => false },
+  } as unknown as ExtensionContext);
+  assert.equal(runtime.active, false);
+  assert.equal(calls, 0);
 });
 
 function response(tokens = 20): Response {
@@ -125,32 +212,28 @@ test(
 
 for (const cancellation of ["caller abort", "new generation"] as const) {
   test(
-    `${cancellation} during budget refresh rejects a late success without pausing the active generation`,
+    `${cancellation} after receipt rejects a late success without pausing the active generation`,
     { timeout: 3000 },
     async (t) => {
       const { runtime, ctx } = await fixture(t, async () => response());
       await runtime.enable(ctx, true);
-      const refreshing = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      t.after(() => release.resolve());
-      const budget = runtime.jev!.budget;
-      const usage = budget.usage.bind(budget);
-      budget.usage = async () => {
-        refreshing.resolve();
-        await release.promise;
-        return usage();
-      };
       const caller = new AbortController();
-      const pending = runtime.evaluator(ctx, "Review")(request, caller.signal);
-      const rejected = assert.rejects(pending, /abort|cancel|session changed/i);
-      await refreshing.promise;
-      if (cancellation === "caller abort") caller.abort();
-      else {
-        runtime.pause(ctx);
-        await runtime.enable(ctx, true);
-      }
-      release.resolve();
-      await rejected;
+      const oldJev = runtime.jev!;
+      const evaluate = oldJev.evaluate.bind(oldJev);
+      oldJev.evaluate = async (...args) => {
+        const result = await evaluate(...args);
+        if (cancellation === "caller abort") caller.abort();
+        else {
+          runtime.pause(ctx);
+          await runtime.enable(ctx, true);
+        }
+        return result;
+      };
+      await assert.rejects(
+        runtime.evaluator(ctx, "Review")(request, caller.signal),
+        /abort|cancel|session changed/i,
+      );
+      oldJev.evaluate = evaluate;
       assert.equal(runtime.active, true);
       assert.equal(
         (await runtime.evaluator(ctx, "Fresh review")(request)).model,
@@ -187,31 +270,30 @@ test(
 );
 
 test(
-  "reenabling the same session retains its consumed token budget",
+  "reenabling and reloading restore receipts without disk state or spending limits",
   { timeout: 3000 },
   async (t) => {
     let calls = 0;
     const { root, runtime, ctx } = await fixture(t, async () => {
       calls++;
-      return response(8192);
+      return response(1_000_000);
     });
-    await writeFile(
-      join(root, "jevons.json"),
-      JSON.stringify({
-        budget: { requestTokens: 8192, sessionTokens: 8192, dayTokens: 16384 },
-      }),
-    );
     await runtime.enable(ctx, true);
     await runtime.evaluator(ctx, "Review")(request);
-    assert.equal((await runtime.jev!.budget.usage()).session, 8192);
     runtime.pause(ctx);
     await runtime.enable(ctx, true);
-    assert.equal((await runtime.jev!.budget.usage()).session, 8192);
-    await assert.rejects(
-      runtime.evaluator(ctx, "Review")(request),
-      /session.*budget.*exhausted/i,
-    );
-    assert.equal(calls, 1);
-    assert.equal(runtime.active, false);
+    assert.equal(runtime.usageSummary(ctx).input, 1_000_000);
+    await runtime.evaluator(ctx, "Review")(request);
+    const reloaded = new Runtime({} as ExtensionAPI);
+    assert.deepEqual(reloaded.usageSummary(ctx), {
+      input: 2_000_000,
+      output: 0,
+      calls: 2,
+      unknown: 0,
+      failed: 0,
+    });
+    assert.equal(calls, 2);
+    assert.equal(runtime.active, true);
+    assert.deepEqual(await readdir(root), []);
   },
 );

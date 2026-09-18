@@ -1,11 +1,10 @@
-import { join } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { Evaluate, Evaluation, Policy } from "../src/contracts.ts";
-import { Budget } from "../src/budget.ts";
-import type { BudgetUsage } from "../src/budget.ts";
+import { summarizeUsage } from "../src/usage.ts";
+import type { UsageSummary } from "../src/usage.ts";
 import { Jev } from "./service.ts";
 import { loadPolicy } from "./policy.ts";
 
@@ -13,7 +12,6 @@ export class Runtime {
   readonly pi: ExtensionAPI;
   policy?: Policy;
   jev?: Jev;
-  usage?: BudgetUsage;
   controller = new AbortController();
   active = false;
   sessionId?: string;
@@ -63,13 +61,15 @@ export class Runtime {
     opening.signal.throwIfAborted();
     if (!confirmed) {
       if (!ctx.hasUI)
-        throw new Error("Start Pi with --jevons to enable network access.");
+        throw new Error(
+          "Jevons needs an interactive session to resume sharing.",
+        );
       if (
         !(await ctx.ui.confirm(
           "Enable Jevons?",
           [
             "Shares task text, skill metadata, tool arguments, bounded diagnostic outcomes and selected source with TypeSafe. Explicit PR reviews fetch source from github.com using gh.",
-            `Budget: ${policy.budget.sessionTokens.toLocaleString()} tokens/session; ${policy.budget.dayTokens.toLocaleString()} tokens/project UTC day.`,
+            "Reported token usage is visible; no token spending limits are enforced.",
             `Models: ${policy.autopilot.models}. Skills: ${policy.autopilot.skills ? "load selected" : "off"}. Automatic review: ${policy.review.automatic ? "on" : "off"}.`,
             policy.writer
               ? `Free-text questions send explicit context to ${policy.writer.provider}/${policy.writer.model} first; additional provider cost.`
@@ -89,21 +89,12 @@ export class Runtime {
     const sessionId = ctx.sessionManager.getSessionId();
     this.sessionId = sessionId;
     this.jev = new Jev({
-      budget: new Budget(
-        join(ctx.cwd, ".jevons", "budget"),
-        sessionId,
-        policy.budget,
-      ),
       model: policy.model,
       record: (receipt) => {
         if (this.sessionId === sessionId)
           this.pi.appendEntry("jevons.receipt", receipt);
       },
     });
-    const ready = this.controller.signal;
-    const usage = await this.jev.budget.usage();
-    ready.throwIfAborted();
-    this.usage = usage;
     this.active = true;
     this.status(ctx);
   }
@@ -114,14 +105,26 @@ export class Runtime {
     this.status(ctx);
   }
 
+  usageSummary(ctx: ExtensionContext): UsageSummary {
+    // Branch navigation cannot undo already incurred usage.
+    return summarizeUsage(
+      ctx.sessionManager
+        .getEntries()
+        .flatMap((entry) =>
+          entry.type === "custom" && entry.customType === "jevons.receipt"
+            ? [entry.data]
+            : [],
+        ),
+    );
+  }
+
   status(ctx: ExtensionContext, activity?: string): void {
-    const budget = this.usage
-      ? ` · ${this.usage.session.toLocaleString()}/${this.policy!.budget.sessionTokens.toLocaleString()} tokens${this.usage.pending ? ` (${this.usage.pending} pending)` : ""}`
-      : "";
+    const usage = this.usageSummary(ctx);
+    const tokens = ` · ${usage.input.toLocaleString()} in / ${usage.output.toLocaleString()} out${usage.unknown ? ` · ${usage.unknown} unknown` : ""}`;
     if (ctx.hasUI)
       ctx.ui.setStatus(
         "jevons",
-        `Jevons · ${this.active ? (activity ?? "on") : "paused"}${budget} · /jevons`,
+        `Jevons · ${this.active ? (activity ?? "on") : "paused"}${tokens} · /jevons`,
       );
   }
 
@@ -146,13 +149,7 @@ export class Runtime {
         if (this.controller.signal === lifetime) this.active = false;
         throw error;
       } finally {
-        if (this.controller.signal === lifetime) {
-          const usage = await jev.budget.usage().catch(() => undefined);
-          if (this.controller.signal === lifetime) {
-            this.usage = usage;
-            this.status(ctx);
-          }
-        }
+        if (this.controller.signal === lifetime) this.status(ctx);
       }
       lifetime.throwIfAborted();
       signal?.throwIfAborted();

@@ -24,7 +24,11 @@ type Handler = (
   ctx: ExtensionContext,
 ) => unknown;
 
-async function fixture(t: TestContext, checks: Policy["checks"] = []) {
+async function fixture(
+  t: TestContext,
+  checks: Policy["checks"] = [],
+  toolFeedback = false,
+) {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "jevons-integration-")),
   );
@@ -54,7 +58,10 @@ async function fixture(t: TestContext, checks: Policy["checks"] = []) {
       });
     },
   );
-  await writeFile(join(root, "jevons.json"), JSON.stringify({ checks }));
+  await writeFile(
+    join(root, "jevons.json"),
+    JSON.stringify({ checks, autopilot: { tools: toolFeedback } }),
+  );
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<
     string,
@@ -105,10 +112,31 @@ async function fixture(t: TestContext, checks: Policy["checks"] = []) {
   };
   const command = (args: string) => commands.get("jevons")!.handler(args, ctx);
   await emit("session_start", { reason: "startup" });
-  await command("on");
   t.after(() => emit("session_shutdown", { reason: "quit" }).then(() => {}));
   return { root, ctx, session, emit, command, requests, sent, tools };
 }
+
+test("loading the extension enables trusted-session decisions without creating project state", async (t) => {
+  const h = await fixture(t);
+  await h.tools.get("jevons_decide")!.execute(
+    "decision",
+    {
+      state: { task: "Check a supplied fact" },
+      questions: {
+        supported: { type: "noul", instructions: "Is the task supplied?" },
+      },
+    },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  assert.equal(h.requests.length, 1);
+  assert.deepEqual(await readdir(h.root), ["jevons.json"]);
+  await h.command("pause");
+  await h.command("usage");
+  await h.command("activity");
+  assert.equal(h.requests.length, 1);
+});
 
 test("completed writer usage survives a subsequent Jev failure as an errored native tool result", async (t) => {
   const h = await fixture(t);
@@ -243,7 +271,7 @@ test("explicit-only skills never enter shared candidates or selected skill conte
 });
 
 test("only delivered steering and follow-up constraints affect tool assessments", async (t) => {
-  const h = await fixture(t);
+  const h = await fixture(t, [], true);
   const task = "Maintain the database";
   await h.emit("input", { source: "interactive", text: task });
   await h.emit("message_start", { message: { role: "user", content: task } });
@@ -276,7 +304,7 @@ test("only delivered steering and follow-up constraints affect tool assessments"
 });
 
 test("continue preserves delivered constraints and queued or handled input cannot overwrite them", async (t) => {
-  const h = await fixture(t);
+  const h = await fixture(t, [], true);
   const original = "Fix the parser; do not publish or delete fixtures.";
   await h.emit("input", { source: "interactive", text: "not delivered" });
   await h.emit("message_start", {
