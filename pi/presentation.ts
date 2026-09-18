@@ -27,6 +27,8 @@ const indent = (text: string) =>
     .join("\n");
 const section = (title: string, body: string) => `${title}\n${indent(body)}`;
 type Writer = Omit<AuthoredQuestions, "questions">;
+const ownValue = <T>(record: Record<string, T>, key: string): T | undefined =>
+  Object.hasOwn(record, key) ? record[key] : undefined;
 
 export interface DecisionDetails {
   request?: Request;
@@ -206,7 +208,13 @@ export function formatDecisionDetails(details?: DecisionDetails): string {
       "Questions and answers",
       ids.length
         ? ids
-            .map((id) => questionDetails(id, questions[id], answers[id]))
+            .map((id) =>
+              questionDetails(
+                id,
+                ownValue(questions, id),
+                ownValue(answers, id),
+              ),
+            )
             .join("\n\n")
         : "No questions or answers retained.",
     ),
@@ -272,8 +280,8 @@ export function formatReviewDetails(report?: DiffReport): string {
             [
               jevDetails(evaluation),
               ...ids.map((id) => {
-                const location = mapping[id];
-                return `${label(id)} · ${location ? `${label(location.path)} [${label(location.chunkId)}] · rule ${label(location.rule)}` : "question mapping missing"}\n${indent(answerDetails(answers[id]))}`;
+                const location = ownValue(mapping, id);
+                return `${label(id)} · ${location ? `${label(location.path)} [${label(location.chunkId)}] · rule ${label(location.rule)}` : "question mapping missing"}\n${indent(answerDetails(ownValue(answers, id)))}`;
               }),
             ].join("\n"),
           );
@@ -388,12 +396,24 @@ export function formatVerificationDetails(run: VerificationRun): string {
   ].join("\n\n");
 }
 
+// Session metadata is not schema-validated by Pi. Keep malformed historical
+// records visible as unavailable, without falling back to a raw source dump.
+export function formatRestoredDetails(format: () => string): string {
+  try {
+    return format();
+  } catch {
+    return "Details unavailable: malformed or unsupported record; no judgment established.";
+  }
+}
+
 function messageDetails(details: unknown): string {
   if (!details) return "Details: not retained.";
   if (Array.isArray(details))
     return (
       details
-        .map((receipt) => formatReceiptDetails(receipt as Receipt))
+        .map((receipt) =>
+          formatRestoredDetails(() => formatReceiptDetails(receipt as Receipt)),
+        )
         .join("\n\n") || "No receipts on this page."
     );
   if (typeof details === "object") {
@@ -418,14 +438,16 @@ export function registerPresentation(pi: ExtensionAPI): void {
     (entry, { expanded }, theme) => {
       const receipt = entry.data;
       if (!receipt) return new Text("Jevons receipt: unavailable", 0, 0);
-      const tokens = receipt.usage
-        ? `${receipt.usage.input_tokens + receipt.usage.output_tokens} tokens`
-        : "usage unknown";
-      const heading = `${receipt.purpose} · ${receipt.status} · ${tokens} · ${receipt.elapsedMs}ms`;
       return new Text(
-        expanded
-          ? formatReceiptDetails(receipt)
-          : theme.fg("muted", label(heading)),
+        formatRestoredDetails(() => {
+          const tokens = receipt.usage
+            ? `${receipt.usage.input_tokens + receipt.usage.output_tokens} tokens`
+            : "usage unknown";
+          const heading = `${receipt.purpose} · ${receipt.status} · ${tokens} · ${receipt.elapsedMs}ms`;
+          return expanded
+            ? formatReceiptDetails(receipt)
+            : theme.fg("muted", label(heading));
+        }),
         0,
         0,
       );
@@ -436,12 +458,14 @@ export function registerPresentation(pi: ExtensionAPI): void {
     (entry, { expanded }, theme) => {
       const details = entry.data ?? {};
       return new Text(
-        expanded
-          ? formatRecoveryDetails(details)
-          : theme.fg(
-              "muted",
-              `Recovery · ${label(details.status ?? "unknown")} · ${label(details.action ?? "no action recorded")}${details.mode === "shadow" ? " (shadow)" : ""}`,
-            ),
+        formatRestoredDetails(() =>
+          expanded
+            ? formatRecoveryDetails(details)
+            : theme.fg(
+                "muted",
+                `Recovery · ${label(details.status ?? "unknown")} · ${label(details.action ?? "no action recorded")}${details.mode === "shadow" ? " (shadow)" : ""}`,
+              ),
+        ),
         0,
         0,
       );
@@ -466,7 +490,7 @@ export function registerPresentation(pi: ExtensionAPI): void {
         ) +
           safeText(content) +
           (expanded && message.details && customType === "jevons"
-            ? `\n\n${messageDetails(message.details)}`
+            ? `\n\n${formatRestoredDetails(() => messageDetails(message.details))}`
             : ""),
         0,
         0,

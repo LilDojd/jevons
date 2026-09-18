@@ -116,6 +116,53 @@ async function fixture(
   return { root, ctx, session, emit, command, requests, sent, tools };
 }
 
+test("native tool renderers contain malformed saved metadata without dumping its source", async (t) => {
+  const { tools } = await fixture(t);
+  for (const [name, details] of [
+    ["jevons_decide", { result: { model: "old-model" } }],
+    ["jevons_review", { reviewedChunks: 1 }],
+  ] as const) {
+    const render = tools.get(name)!.renderResult as unknown as (
+      result: unknown,
+      options: { expanded: boolean },
+    ) => { render(width: number): string[] };
+    const text = render(
+      {
+        content: [{ type: "text", text: "private-output-sentinel" }],
+        details: { ...details, source: "private-metadata-sentinel" },
+      },
+      { expanded: true },
+    )
+      .render(100)
+      .join("\n");
+    assert.match(text, /unavailable/i);
+    assert.doesNotMatch(text, /private-(output|metadata)-sentinel/);
+  }
+});
+
+test("usage displays an exact combined total when separate columns exceed the numeric sum range", async (t) => {
+  const h = await fixture(t);
+  t.mock.method(h.ctx.sessionManager, "getEntries", () =>
+    [
+      { input_tokens: Number.MAX_SAFE_INTEGER, output_tokens: 0 },
+      { input_tokens: 0, output_tokens: 2 },
+    ].map((usage) => ({
+      type: "custom",
+      customType: "jevons.receipt",
+      data: { status: "completed", accounting: "reported", usage },
+    })),
+  );
+  await h.command("usage");
+  const content = h.sent.at(-1)![0].content;
+  assert.equal(typeof content, "string");
+  assert.ok(
+    (content as string).includes(
+      (BigInt(Number.MAX_SAFE_INTEGER) + 2n).toLocaleString(),
+    ),
+  );
+  assert.equal(h.requests.length, 0);
+});
+
 test("loading the extension enables trusted-session decisions without creating project state", async (t) => {
   const h = await fixture(t);
   await h.tools.get("jevons_decide")!.execute(
@@ -216,6 +263,105 @@ test("completed writer usage survives a subsequent Jev failure as an errored nat
     isError: true,
   });
   assert.ok(repeated.every((value) => value === undefined));
+});
+
+for (const dialog of ["menu", "prompt", "context"] as const) {
+  test(`a pending ${dialog} dialog cannot act in a replacement session`, async (t) => {
+    const h = await fixture(t);
+    const answer = Promise.withResolvers<string>();
+    const opened = Promise.withResolvers<void>();
+    const pending = async () => {
+      opened.resolve();
+      return answer.promise;
+    };
+    h.ctx.ui.select = pending;
+    h.ctx.ui.input = pending;
+    h.ctx.ui.editor = pending;
+    let writerCalls = 0;
+    h.ctx.modelRegistry.getAvailable = () => [h.ctx.model!];
+    h.ctx.modelRegistry.complete = async () => {
+      writerCalls++;
+      throw new Error("Unexpected stale writer call");
+    };
+    const command = h.command(
+      dialog === "menu"
+        ? ""
+        : dialog === "prompt"
+          ? "ask"
+          : "ask Check clarity",
+    );
+    await opened.promise;
+    await h.emit("session_before_switch", { reason: "new" });
+    h.session.id = "replacement";
+    await h.emit("session_start", { reason: "new" });
+    answer.resolve(
+      dialog === "menu" ? "pause — Stop sharing and automation" : "Old context",
+    );
+    await command;
+    assert.equal(writerCalls, 0);
+    // A stale menu selection must not pause the replacement session either.
+    await h.tools.get("jevons_decide")!.execute(
+      "fresh-decision",
+      {
+        state: "fresh",
+        questions: {
+          q: { type: "noul", instructions: "Is fresh supplied?" },
+        },
+      },
+      undefined,
+      undefined,
+      h.ctx,
+    );
+    assert.equal(h.requests.length, 1);
+  });
+}
+
+test("remote review rejects empty and foreign URLs rather than falling back to local source", async (t) => {
+  const h = await fixture(t);
+  for (const url of [
+    "",
+    "https://example.com/org/repo/pull/1",
+    "https://github.com@localhost/org/repo/pull/1",
+  ]) {
+    await assert.rejects(
+      h.tools
+        .get("jevons_review")!
+        .execute("review", { url }, undefined, undefined, h.ctx),
+      /Expected a GitHub pull request URL/,
+    );
+  }
+  await assert.rejects(
+    h.tools
+      .get("jevons_review")!
+      .execute("mixed", { url: "", paths: [] }, undefined, undefined, h.ctx),
+    /Supply paths or a PR URL/,
+  );
+  assert.equal(h.requests.length, 0);
+});
+
+test("decision tools reject both or neither question sources before network use", async (t) => {
+  const h = await fixture(t);
+  for (const sources of [
+    {},
+    {
+      prompt: "Check",
+      questions: { q: { type: "noul", instructions: "Check" } },
+    },
+  ]) {
+    await assert.rejects(
+      h.tools
+        .get("jevons_decide")!
+        .execute(
+          "invalid",
+          { state: null, ...sources },
+          undefined,
+          undefined,
+          h.ctx,
+        ),
+      /Supply questions or a prompt/,
+    );
+  }
+  assert.equal(h.requests.length, 0);
 });
 
 const toolCall = {

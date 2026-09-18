@@ -16,6 +16,7 @@ import {
   formatEvaluation,
   formatDecisionDetails,
   formatReviewDetails,
+  formatRestoredDetails,
   safeText,
 } from "./presentation.ts";
 import { requestSchema, questionsSchema, parseRequest } from "./schema.ts";
@@ -86,7 +87,7 @@ export default function extension(pi: ExtensionAPI): void {
     ]);
     const selected = paths;
     const collect = () =>
-      url
+      url !== undefined
         ? collectPullRequestDiff(url, combined)
         : collectLocalDiff(ctx.cwd, selected, combined);
     const snapshot = await collect();
@@ -108,7 +109,7 @@ export default function extension(pi: ExtensionAPI): void {
       );
     }
     combined.throwIfAborted();
-    if (report.complete && !url) {
+    if (report.complete && url === undefined) {
       if (!selected.length) runtime.edits.clear();
       else for (const path of selected) runtime.edits.delete(path);
     }
@@ -237,15 +238,19 @@ export default function extension(pi: ExtensionAPI): void {
       };
     },
     renderResult(result, { expanded }) {
-      const details = result.details as DecisionDetails | undefined;
-      const text = details?.result
-        ? formatEvaluation(details.result, details.request, details.writer)
-        : result.content
-            .filter((part) => part.type === "text")
-            .map((part) => part.text)
-            .join("\n");
       return new Text(
-        safeText(expanded && details ? formatDecisionDetails(details) : text),
+        formatRestoredDetails(() => {
+          const details = result.details as DecisionDetails | undefined;
+          const text = details?.result
+            ? formatEvaluation(details.result, details.request, details.writer)
+            : result.content
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join("\n");
+          return safeText(
+            expanded && details ? formatDecisionDetails(details) : text,
+          );
+        }),
         0,
         0,
       );
@@ -268,12 +273,12 @@ export default function extension(pi: ExtensionAPI): void {
             maxItems: 40,
           }),
         ),
-        url: Type.Optional(Type.String({ maxLength: 512 })),
+        url: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
       },
       { additionalProperties: false },
     ),
     async execute(_id, params, signal, _update, ctx) {
-      if (params.url && params.paths)
+      if (params.url !== undefined && params.paths !== undefined)
         throw new Error("Supply paths or a PR URL, not both.");
       const report = await review(ctx, params.paths ?? [], signal, params.url);
       return {
@@ -282,15 +287,16 @@ export default function extension(pi: ExtensionAPI): void {
       };
     },
     renderResult(result, { expanded }) {
-      const text = result.content
-        .filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("\n");
       return new Text(
-        safeText(
-          expanded && result.details
-            ? formatReviewDetails(result.details as DiffReport)
-            : text,
+        formatRestoredDetails(() =>
+          safeText(
+            expanded && result.details
+              ? formatReviewDetails(result.details as DiffReport)
+              : result.content
+                  .filter((part) => part.type === "text")
+                  .map((part) => part.text)
+                  .join("\n"),
+          ),
         ),
         0,
         0,
@@ -331,7 +337,9 @@ export default function extension(pi: ExtensionAPI): void {
             "activity — Recent requests, models and token usage",
             "settings — Edit session settings now",
           ];
+          const opening = runtime.controller;
           action = (await ctx.ui.select("Jevons", choices))?.split(" — ")[0];
+          if (opening !== runtime.controller) return;
         }
         if (!action) return;
         if (action === "on") {
@@ -356,7 +364,7 @@ export default function extension(pi: ExtensionAPI): void {
           const usage = runtime.usageSummary(ctx);
           show(
             [
-              `Jev usage · ${usage.calls} requests · ${(usage.input + usage.output).toLocaleString()} reported tokens`,
+              `Jev usage · ${usage.calls} requests · ${(BigInt(usage.input) + BigInt(usage.output)).toLocaleString()} reported tokens`,
               `${usage.input.toLocaleString()} input · ${usage.output.toLocaleString()} output · ${usage.failed} failed/cancelled · ${usage.unknown} unknown usage`,
               "All branches of this Pi session. Unknown usage is not zero. No spending caps or project ledger.",
               "Question-writer usage is separate and appears in decision details; coding-model usage stays in Pi.",
@@ -390,6 +398,7 @@ export default function extension(pi: ExtensionAPI): void {
           return;
         }
         if (action === "ask") {
+          const lifetime = runtime.controller.signal;
           const prompt =
             args.join(" ") ||
             (ctx.hasUI
@@ -398,11 +407,11 @@ export default function extension(pi: ExtensionAPI): void {
                   "A focused question about explicit context",
                 )
               : undefined);
-          if (!prompt) return;
+          if (!prompt || lifetime.aborted) return;
           const context = ctx.hasUI
             ? await ctx.ui.editor("Context for Jev", "")
             : undefined;
-          if (context === undefined) return;
+          if (context === undefined || lifetime.aborted) return;
           const evaluate = runtime.evaluator(ctx, "Free-text question");
           const selected =
             runtime.policy!.writer ??
@@ -413,7 +422,7 @@ export default function extension(pi: ExtensionAPI): void {
           const authored = await authorQuestions(
             ctx,
             { prompt, state: context, writer: selected },
-            runtime.controller.signal,
+            lifetime,
           );
           const request = parseRequest({
             state: context,

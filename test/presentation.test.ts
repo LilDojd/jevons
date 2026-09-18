@@ -126,6 +126,28 @@ test("expanded decisions retain readable state, complete criteria, raw distribut
   contains(summary, [evaluation.model, writer.model, "0.8123456789012345"]);
 });
 
+test("prototype-named question IDs do not manufacture retained questions or answers", () => {
+  const text = formatDecisionDetails({
+    questions: {
+      constructor: {
+        type: "noul" as const,
+        instructions: "Was this assessed?",
+      },
+    },
+    result: {
+      ...evaluation,
+      answers: { toString: { type: "noul" as const, noul: 0.4 } },
+    },
+  });
+  contains(text, [
+    "constructor",
+    "Answer: missing; not assessed.",
+    "toString",
+    "Question: not retained.",
+    "P(true) = 0.4",
+  ]);
+});
+
 test("native failed-result details retain completed writer usage without manufacturing a Jev judgment", () => {
   const text = formatDecisionDetails({ writer, status: "failed" });
   contains(text, [
@@ -321,6 +343,25 @@ test("review details expose coverage, pinned comparison, exact ranges, criteria 
   });
   contains(all, ["finding-21", "omission-11"]);
   contains(formatReviewDetails(), ["unavailable", "no coverage established"]);
+  contains(
+    formatReviewDetails({
+      ...report,
+      questionMaps: [{ toString: report.questionMaps[0]!.q! }],
+      evaluations: [
+        {
+          ...evaluation,
+          answers: { constructor: { type: "noul" as const, noul: 0.2 } },
+        },
+      ],
+    }),
+    [
+      "toString",
+      "Answer: missing; not assessed.",
+      "constructor",
+      "question mapping missing",
+      "P(true) = 0.2",
+    ],
+  );
 });
 
 test("recovery details distinguish shadow actions and incomplete evidence with source-free actual judgments", () => {
@@ -434,6 +475,48 @@ test("registered expanded renderers wrap at narrow widths and activity receipts 
     theme,
   )!;
   contains(decision.render(120).join("\n"), ["Readable", "Raw probability"]);
+  for (const details of [
+    [null],
+    [{ purpose: "Decision", request: { state: "SECRET_SOURCE" } }],
+    { selection: null, results: [] },
+    { reviewedChunks: 1 },
+    { result: { model: "old", answers: {} } },
+  ]) {
+    const restored = messages.get("jevons")!(
+      {
+        content: "Historical record",
+        details,
+      } as Parameters<MessageRenderer>[0],
+      options,
+      theme,
+    )!;
+    const text = restored.render(120).join("\n");
+    contains(text, ["Historical record", "unavailable", "malformed"]);
+    assert.ok(!text.includes("SECRET_SOURCE"));
+  }
+  for (const [name, data] of [
+    [
+      "jevons.receipt",
+      { purpose: "Decision", request: { state: "SECRET_SOURCE" } },
+    ],
+    [
+      "jevons.recovery",
+      {
+        status: "assessed",
+        evaluation: { model: "old" },
+        task: "SECRET_SOURCE",
+      },
+    ],
+  ] as const) {
+    const restored = entries.get(name)!(
+      { data } as Parameters<EntryRenderer>[0],
+      { expanded: true } as Parameters<EntryRenderer>[1],
+      theme,
+    )!;
+    const text = restored.render(120).join("\n");
+    contains(text, ["unavailable", "malformed"]);
+    assert.ok(!text.includes("SECRET_SOURCE"));
+  }
   const narrow = new Text(formatReviewDetails(report), 0, 0).render(24);
   assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
 });
