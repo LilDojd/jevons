@@ -1,6 +1,10 @@
 # Jevons
 
-Context-aware autopilot, code review and focused questions for Pi.
+![100% slop](https://img.shields.io/badge/%F0%9F%A4%96%20100%25-slop-a3e635?style=plastic&labelColor=4c1d95 "100% LLM-generated")
+
+A bounded execution supervisor for [Pi](https://github.com/badlogic/pi-mono), powered by TypeSafe's Jev. Not a second coding agent: Jev interprets evidence; ordinary code controls freshness, limits and permitted responses.
+
+## Start
 
 ```sh
 devenv shell
@@ -8,57 +12,55 @@ bun install --frozen-lockfile --ignore-scripts
 pi --no-extensions -e "$PWD/pi/extension.ts"
 ```
 
-Set `TYPESAFE_API_KEY` in your runtime environment. Open `/jevons` and enable the session. For an explicitly enabled worker, add `--jevons` to its Pi command. No global configuration changes are needed.
+Set `TYPESAFE_API_KEY` in your runtime environment. **Installing or loading Jevons enables sharing automatically in trusted projects**—there is no enable flag. Task text, skill descriptions, selected source and bounded diagnostics may be sent to TypeSafe. Untrusted projects remain disabled. `/jevons pause` cancels work and stops new requests; `/jevons on` reloads policy and resumes sharing. Loading a new session or reloading the extension activates it again.
 
-## Workflows
+Keep credentials outside Git and the Nix store. A local `.env` is ignored; load it explicitly into the Pi process environment. No global configuration change is needed for the command above.
 
-- **Autopilot** shortlists skills using lexical overlap, asks Jev about each candidate, and loads up to three selected skill bodies into the current turn. Model routing uses your profile descriptions, available credentials, model scope, context capacity and image support. Default: suggest; `switch` enables automatic model changes.
-- **Tool feedback** assesses proposed non-read tool calls against delivered user constraints. “Continue” and steering updates do not erase earlier constraints. Concerns appear in the transcript and next model context; they do not block execution.
-- **Recovery** observes tool outcomes at completed batch boundaries. Code tracks exact invocation repeats; Jev separately judges ignored diagnostic causes, cause category, and user-only decisions. Enabled sessions can receive bounded, fixed replan/ask-user steering—not commands or a second coding agent. Shadow mode records the same judgments without steering.
-- **Review** checks diffs for successful `edit`/`write` paths after the agent settles. Each changed chunk × rule gets an independent question; large changes are batched, not rejected at a per-file byte limit. Explicit review covers shell/external edits and pinned GitHub PR diffs. Missing, changed, unsupported or uncertain evidence stays visible. Chunk-local review does not establish cross-hunk or cross-file correctness.
-- **Ask Jev** accepts typed Noul, Choice and Score questions, or a free-text prompt. Free text goes through the configured prompt writer (current coding model by default), using a schema-defined tool call. Invalid output never reaches Jev.
+## What it does
 
-`jevons_decide` and `jevons_review` are available to the coding agent. Put relevant evidence in named state fields; questions cannot see one another’s answers. Use code for calculations and exact lookups.
+- **Skill selection:** evaluates discovered descriptions for concrete task utility, ranks the judgments and loads up to three skills—or none. Admission no longer requires matching words. It assesses at most 31 eligible skills from the first 512 discovered entries, with explicit omissions. Native explicit and mandatory instructions remain intact. Skill bodies are bounded to 12,000 bytes each and 20,000 combined.
+- **Failure recovery:** observes actual completed tool outcomes, not a failure streak. Code detects exact repeats; Jev judges ignored causes, diagnostic category and user-only blockers independently. Default **shadow mode** records proposed responses without interrupting. Opt-in steering delivers fixed replan/ask-user guidance, never generated commands.
+- **Review:** assesses each changed chunk against each configured rule. Automatic review covers successful `edit`/`write` paths; explicit review also covers shell/external edits and pinned GitHub PR diffs. Missing or uncertain evidence remains visible, not an approval.
+- **Investigation:** separately opt-in. A sufficiently concerning, complete local review can trigger one focused follow-up per unchanged snapshot. It reuses the reviewed chunk, permits guidance to read at most one relevant definition/caller/test through existing tools, and requests a supported/unsupported/unresolved explanation—not a fix or another review. Freshness checks discard stale advisories; session checkpoints prevent replay.
+- **Verification:** selects among configured commands using check descriptions. Mandatory checks always remain selected; optional checks are skipped only when assessed as clearly irrelevant. Missing or failed judgments keep coverage. Execution needs separate confirmation; commands are never generated by Jev.
+- **Focused questions:** `jevons_decide` accepts independent Noul, Choice and Score questions. Free text first goes through the configured question writer, using a schema-defined tool call. Typed questions need no writer.
 
-## Commands
+Optional pre-tool feedback is off by default: spend judgments on actual outcomes, not approval of every tool call. Model routing uses supplied profiles, available credentials, scope and context/image capacity; it defaults to suggestions. Outcome-driven escalation is not implemented. No capabilities are inferred from model names.
 
-| Command                 | Action                                                   |
-| ----------------------- | -------------------------------------------------------- |
-| `/jevons`               | Open the panel                                           |
-| `/jevons on`            | Load policy and enable sharing                           |
-| `/jevons pause`         | Cancel work and stop new requests                        |
-| `/jevons ask QUESTION`  | Enter context and ask a free-text question               |
-| `/jevons review PATH…`  | Review selected paths; defaults to the working-copy diff |
-| `/jevons review PR_URL` | Review a pinned GitHub PR diff through `gh`              |
-| `/jevons gate PATH…`    | Confirm and run configured checks, then review           |
-| `/jevons usage`         | Show session and project-day token admission totals      |
-| `/jevons activity PAGE` | Browse source-free request receipts, 20 per page         |
-| `/jevons settings`      | Inspect active project policy                            |
+## Commands and UI
 
-Paths containing spaces can be supplied through the review tool’s `paths` array. Automatic review never runs executable checks. Failed executable checks stop the gate before semantic review.
+| Command                 | Action                                                            |
+| ----------------------- | ----------------------------------------------------------------- |
+| `/jevons`               | Open the descriptive action panel                                 |
+| `/jevons on`            | Reload policy and resume sharing                                  |
+| `/jevons pause`         | Cancel work and stop requests                                     |
+| `/jevons ask QUESTION`  | Enter explicit context and ask Jev                                |
+| `/jevons review PATH…`  | Review selected paths; defaults to the working-copy diff          |
+| `/jevons review PR_URL` | Fetch a pinned GitHub PR diff with `gh`; no checkout or execution |
+| `/jevons gate PATH…`    | Select checks, confirm execution, then review                     |
+| `/jevons usage`         | Session-wide reported input/output tokens and unknown usage       |
+| `/jevons activity PAGE` | Source-free receipts, newest first, 20 per page                   |
+| `/jevons settings`      | Inspect active policy                                             |
 
-Expand tool results (Ctrl+O) for structured sections showing submitted state, questions, criteria, distributions, writer identity, usage and timing, or review coverage, ranges and omissions. Request receipts show the actual Jev model, probabilities, token usage and duration. Pi retains full tool arguments in its ordinary session transcript; the budget ledger stores only accounting metadata.
+`jevons_review` and `jevons_decide` are also agent tools. Use the review tool's `paths` array for paths containing spaces. Questions cannot see one another's answers; put relevant evidence in named state fields and keep calculations in code.
+
+Expand results with **Ctrl+O** for structured questions, criteria, raw distributions, actual model versions, writer usage, review coverage and check diagnostics. The footer shows Jev input/output totals. Usage and activity work while paused without network access.
 
 ## Policy
 
-An optional `jevons.json` overrides defaults. It is loaded only in trusted projects and applied on enablement.
+An optional, trusted-project `jevons.json` overrides defaults. Changes apply on `/jevons on` or extension reload.
 
 ```json
 {
   "model": "jev-1.13.0",
-  "budget": {
-    "sessionTokens": 1000000,
-    "dayTokens": 5000000,
-    "requestTokens": 65536
-  },
   "autopilot": {
     "skills": true,
     "models": "suggest",
-    "tools": true,
+    "tools": false,
     "threshold": 0.8
   },
   "recovery": {
-    "mode": "steer",
+    "mode": "shadow",
     "retryConcern": 0.85,
     "userConcern": 0.9,
     "cooldownTurns": 3,
@@ -67,12 +69,17 @@ An optional `jevons.json` overrides defaults. It is loaded only in trusted proje
   "profiles": [],
   "review": {
     "automatic": true,
+    "investigate": false,
+    "investigateConcern": 0.9,
     "concern": 0.8,
     "clear": 0.2
   },
+  "verification": { "select": true, "relevance": 0.6 },
   "checks": [
     {
       "name": "tests",
+      "description": "Behavior and failure-boundary tests for the project",
+      "mandatory": true,
       "argv": ["devenv", "shell", "--", "bun", "test"],
       "timeoutMs": 60000
     }
@@ -80,23 +87,33 @@ An optional `jevons.json` overrides defaults. It is loaded only in trusted proje
 }
 ```
 
-Model profiles are `{ "provider": "…", "model": "…", "description": "When this model is useful" }`. No capability rankings are inferred from model names. Set `writer` to `{ "provider": "…", "model": "…" }` to choose a separate prompt author.
+Checks are mandatory unless explicitly marked `"mandatory": false`. Optional checks without descriptions, uncertain judgments or complete evidence are retained. With the default relevance setting, only probabilities below 0.4 exclude an optional check. Set `verification.select` to `false` to run all configured checks without relevance calls. All selected checks are attempted despite earlier failures; cancellation stops execution. Real exit status determines success. No checks run means unverified, not passed. Workspace-parent/diff and task changes invalidate observations; ignored files, external services and toolchain changes are not tracked.
 
-Default review rules cover visible correctness defects, unnecessary abstraction, code/prose clarity and meaningful behavioral tests. Test guidance follows the Google Testing Blog’s [Test Behavior, Not Implementation](https://testing.googleblog.com/2013/08/testing-on-toilet-test-behavior-not.html) and [Change-Detector Tests](https://testing.googleblog.com/2015/01/testing-on-toilet-change-detector-tests.html): observable contracts matter; source-copy and incidental-layout assertions do not. Necessary safety boundaries are not bloat. Replace `review.rules` with `{ "id", "label", "instructions" }` entries; instructions must ask about a concrete concern, with high probability meaning concern. Thresholds are defaults, not calibrated benchmarks.
+Gate selection and freshness concern the whole workspace, even when the subsequent review is scoped to paths. Failed, stale or unverified execution stops the gate before semantic review. Automatic review never runs project checks. Network sharing is not permission to execute project code.
 
-## Budgets and context
+Model profiles are `{ "provider": "…", "model": "…", "description": "When this model is useful" }`. Set `writer` to `{ "provider": "…", "model": "…" }` to choose a separate question author; otherwise the current coding model is used, at that provider's cost.
 
-Jev ingests state once per request. Its model limits are 64k tokens for state plus all questions, and 32k for state plus the longest question. Jevons batches independent questions without multiplying state by the question count.
+Default review rules cover visible correctness, unnecessary abstraction, code/prose clarity and behavioral tests. They follow the Google Testing Blog's [Test Behavior, Not Implementation](https://testing.googleblog.com/2013/08/testing-on-toilet-test-behavior-not.html) and [Change-Detector Tests](https://testing.googleblog.com/2015/01/testing-on-toilet-change-detector-tests.html): test observable contracts, not copied source or incidental wording. Necessary safety boundaries are not bloat. Replace `review.rules` with `{ "id", "label", "instructions" }` entries asking about concrete concerns. Thresholds are workflow defaults, not calibrated guarantees.
 
-The official SDK does not expose a preflight tokenizer. Local admission conservatively limits serialized requests to 48,000 UTF-8 bytes, and state plus the longest question to 24,000 bytes. These are byte bounds, not exact token counts.
+## Usage, limits and privacy
 
-Diffs are parsed with jsdiff. Whole hunks are preferred; larger hunks are split into chunks of at most 8,000 bytes with context overlap where possible and exact old/new ranges. Review packs chunks and rules under both context bounds and 32 questions per request. Budget exhaustion or the two-minute review deadline returns partial coverage. Raw patches have a 4 MiB safety bound; unsupported giant lines, binary/sensitive files and Git-untracked files are explicit omissions. Jujutsu normally snapshots new files. Reviews recheck the selected diff for staleness.
+There is **no budget ledger, spending cap or `.jevons` directory**. Reported token totals are reconstructed from source-free receipts already in Pi's session history, including other branches. Unknown usage stays unknown—not zero. Writer usage is separate in decision details; coding-model usage remains Pi's responsibility. Old receipts remain readable. Remove the obsolete `budget` section from older policies; any legacy `.jevons/budget` files can be deleted.
 
-Before each request, Jevons reserves `requestTokens` against both the Pi session ID and the project’s UTC day in `.jevons/budget/`. Successful responses reconcile to actual input plus output tokens. Unknown usage keeps its reservation; re-enabling cannot reset it. Concurrent processes share the same ledger. These are request-admission budgets, not an absolute provider billing cap: an unexpectedly large reported usage is recorded in full.
+Requests have no automatic billed retries. Failures pause sharing; use `/jevons on` to resume. Pi retains ordinary tool arguments in its native transcript. Secret-path and credential filters are best-effort boundaries, not a substitute for keeping secrets out of prompts.
 
-No automatic billed retries. Request failures pause Jevons. Inspect an abandoned budget lock before removing it. Prompt-writer tokens are separate coding-provider usage, not Jev tokens.
+Jev ingests state once per request. Jevons limits serialized requests to 48,000 UTF-8 bytes, and state plus the longest question to 24,000 bytes. These are conservative byte bounds, not exact token counts; the SDK has no preflight tokenizer.
 
-Enabling discloses task text, skill metadata, tool arguments, bounded diagnostic outcomes, selected diffs, and prompt-writer sharing. Pause and session navigation cancel in-flight work; new, resumed and forked sessions require enablement again. The footer shows session token admission usage; `/jevons usage` includes project-day usage. Secrets must not be submitted; path and credential checks are best-effort filters.
+Review prefers whole hunks, splits larger ones into chunks up to 8,000 bytes and batches at most 32 questions per request. A two-minute deadline or failed request returns partial coverage. Raw patches have a 4 MiB safety bound. Giant lines, binary/sensitive files and Git-untracked files produce explicit omissions; Jujutsu normally snapshots new files. Selected diffs are rechecked for staleness. Chunk-local judgments cannot establish cross-file correctness or approve merging.
+
+Recovery retains four calls keyed by tool-call ID, with 1,500-byte argument/diagnostic fields. Successful output bodies are not shared. Final batch results supersede provisional results. Missing, oversized or unsupported diagnostic evidence abstains from steering. Exact evidence revisions are assessed once; task, session, branch, policy, evidence or cancellation changes invalidate decisions.
+
+`recovery.mode` accepts `off`, `shadow` or `steer`. Steering defaults allow two interventions per session with three intervening turns; reloads and branch navigation cannot reset that cap. It never grants command, deletion, publishing or credential access. Small fixture experiments are useful smoke tests, not evidence of improved task completion or calibrated interruption thresholds.
+
+## Compaction
+
+Compaction remains Pi-native. An enabled session receives a bounded 24,000-byte historical supplement rebuilt from original current-branch entries: delivered user text, failed-tool diagnostics, review findings and check observations. Native messages and tool-call/result relationships are unchanged. Original user text is prioritized; excerpts and omissions stay explicit. Historical passes do not verify the current revision, and an unrelated success does not resolve an earlier failure.
+
+Task text over 8,000 bytes, image constraints or continuity overflow suspend automatic assessments instead of silently losing constraints. Native tools remain available. Pi 0.85.1's public compaction hook cannot replace the retained message tail; no unsupported compaction dependency is used.
 
 ## Development
 
@@ -106,18 +123,4 @@ devenv shell -- bun run typecheck
 devenv shell -- bun run format:check
 ```
 
-Bun and Node 24 come from the pinned devenv inputs. TypeScript 7, Prettier, Pi, TypeBox, jsdiff and the official TypeSafe SDK are pinned in `bun.lock`. There are no automatic installs, build pipeline or daemon.
-
-- `src/`: dependency-free workflow logic and accounting.
-- `pi/`: official SDK transport, diff collection, schema validation, Pi lifecycle and UI.
-- `test/`: observable contracts, failure boundaries and a real Node/Pi smoke test.
-
-## Recovery and compaction boundaries
-
-Recovery retains four observed calls keyed by tool-call ID, with a 1,500-byte JSON bound per argument/diagnostic field. Successful output bodies are not shared by the observer. Missing, oversized or unsupported diagnostic evidence is counted explicitly and never produces automatic steering. Final batch outcomes supersede provisional results. Each evidence revision is assessed once; decisions are discarded after task, session, branch, policy, evidence or cancellation changes.
-
-`recovery.mode` is `off`, `shadow`, or `steer`. Defaults allow two interventions per session, with three intervening turns; re-enabling, continuing, reloading or navigating a branch cannot reset the session cap. Recovery thresholds are separate from review and skill-selection thresholds, and are not calibrated guarantees. An intervention can only request one focused replan or a user answer. It never grants permission to execute commands, delete, publish or access credentials. Executable checks still require separate confirmation.
-
-Compaction remains Pi-native. After compaction, an enabled session receives a bounded 24,000-byte evidence supplement rebuilt from original entries on the current branch: delivered user text, failed-tool diagnostics, review findings and configured-check observations. This is labelled historical evidence, not fake verbatim conversation or a replacement summary. Native messages and tool-call/result relationships remain untouched. Original user text is prioritized; excerpts and omissions are explicit. Historical passes and findings do not prove the current revision is verified, and an unrelated success does not resolve an earlier failure.
-
-Task text over 8,000 bytes, image-only constraints, or continuity overflow suspend automatic assessments rather than silently losing constraints. Native agent operation remains available. The public Pi 0.85.1 compaction hook cannot replace the retained message tail; no unsupported compaction dependency is enabled.
+Bun and Node 24 come from pinned devenv inputs. TypeScript, Prettier, Pi, TypeBox, jsdiff and the official TypeSafe SDK are pinned in `bun.lock`. Core workflow logic has no runtime dependencies. No automatic installs, build pipeline or daemon.
