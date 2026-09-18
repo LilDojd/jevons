@@ -123,7 +123,7 @@ export function parseRequest(value: unknown): Request {
   if (Buffer.byteLength(serialized) > 48000)
     throw new Error("Jev request exceeds 48,000 bytes; narrow the context.");
   if (
-    /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|apikey_[a-fA-F0-9]{32}_[a-fA-F0-9]{64})/.test(
+    /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|apikey_[A-Za-z0-9_-]{20,})/.test(
       serialized,
     )
   )

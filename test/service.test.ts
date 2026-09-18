@@ -95,6 +95,7 @@ test("invalid contexts and primitive contracts are rejected before network", asy
     { ...request, state: new Array(4) },
     { ...request, state: "x".repeat(48001) },
     { ...request, state: `apikey_${"a".repeat(32)}_${"b".repeat(64)}` },
+    { ...request, state: `apikey_${"a".repeat(36)}_${"b".repeat(64)}` },
     {
       ...request,
       questions: {
