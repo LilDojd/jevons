@@ -112,7 +112,7 @@ export class Runtime {
             policy.writer
               ? `Free-text questions send explicit context to ${policy.writer.provider}/${policy.writer.model} first; additional provider cost.`
               : "Free-text questions send explicit context to the current coding model first; additional provider cost.",
-            `Recovery: ${policy.recovery.mode}; at most ${policy.recovery.maxInterventions} focused replan/ask-user interventions per session, with ${policy.recovery.cooldownTurns} completed turns between them. Never authorizes commands or expands permissions. Native compaction gets a bounded evidence supplement.`,
+            `Recovery: ${policy.recovery.mode}; at most ${policy.recovery.maxInterventions} focused replan/ask-user interventions per session, with ${policy.recovery.cooldownTurns} completed turns between them. Never authorizes commands or expands permissions. Pi handles compaction; Jevons does not replay historical source.`,
             "Pause cancels work. Requests may incur charges; no automatic retries.",
           ].join("\n"),
           { signal: this.controller.signal },

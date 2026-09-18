@@ -9,132 +9,201 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import {
-  CONTINUITY_BYTES,
-  continuityEvidence,
-  registerContinuity,
-} from "../pi/continuity.ts";
+import { registerContinuity } from "../pi/continuity.ts";
 import type { Runtime } from "../pi/runtime.ts";
-import type { DiffReport } from "../src/diff-review.ts";
 
 function user(session: SessionManager, text: string) {
   return session.appendMessage({ role: "user", content: text, timestamp: 1 });
 }
 
 function compact(session: SessionManager) {
-  session.appendCompaction(
-    "Native summary, intentionally lossy",
-    session.getLeafId()!,
-    40_000,
-  );
-}
-
-function records(session: SessionManager): Record<string, any>[] {
-  const content = continuityEvidence(session.getBranch())!.content;
-  return JSON.parse(content.slice(content.indexOf("\n[") + 1));
+  const kept = user(session, "Current user request: do not commit.");
+  return session.appendCompaction("Native summary", kept, 40_000);
 }
 
 function harness(session: SessionManager) {
-  let handler: (
+  type Handler = (
     event: ContextEvent,
     ctx: ExtensionContext,
-  ) => { messages?: ContextEvent["messages"] } | undefined;
-  let reads = 0;
+  ) => { messages: ContextEvent["messages"] } | undefined;
+  let handler: Handler;
   const notifications: string[] = [];
-  const registered: string[] = [];
   const pi = {
-    on(name: string, callback: typeof handler) {
-      registered.push(name);
+    on(name: string, callback: Handler) {
       if (name === "context") handler = callback;
+    },
+    setActiveTools() {
+      assert.fail("Continuity must not change coding-agent tools");
     },
   } as unknown as ExtensionAPI;
   const runtime = { active: true, taskOmitted: false } as Runtime;
   const ctx = {
     hasUI: true,
-    sessionManager: {
-      getBranch() {
-        reads++;
-        return session.getBranch();
-      },
-    },
+    sessionManager: session,
     ui: { notify: (text: string) => notifications.push(text) },
   } as unknown as ExtensionContext;
   registerContinuity(pi, runtime);
   return {
     runtime,
-    registered,
     notifications,
-    reads: () => reads,
     context(messages = session.buildSessionContext().messages) {
       return handler!({ type: "context", messages }, ctx);
     },
   };
 }
 
-test("continuity is opt-in and supplements native compaction without replacing its messages", () => {
+function notice(messages: ContextEvent["messages"]) {
+  const message = messages.at(-1)!;
+  assert.equal(message.role, "custom");
+  assert.ok(message.role === "custom");
+  assert.equal(message.customType, "jevons.continuity");
+  assert.equal(typeof message.content, "string");
+  return message.content as string;
+}
+
+function legacySupplement(
+  content: string,
+): Extract<ContextEvent["messages"][number], { role: "custom" }> {
+  return {
+    role: "custom",
+    customType: "jevons.continuity",
+    content,
+    display: false,
+    timestamp: 1,
+  };
+}
+
+test("native messages and user constraints remain unchanged; no supplement before compaction or while paused", () => {
   const session = SessionManager.inMemory();
-  user(
-    session,
-    "Do not commit.\n  Keep whitespace, 🦉, and constraints exact.\n",
-  );
+  user(session, "Do not commit.\n  Keep whitespace and 🦉 exact.");
   const h = harness(session);
   assert.equal(h.context(), undefined);
   compact(session);
   h.runtime.active = false;
-  const reads = h.reads();
   assert.equal(h.context(), undefined);
-  assert.equal(h.reads(), reads);
   h.runtime.active = true;
   const native = session.buildSessionContext().messages;
   const original = structuredClone(native);
+  const entries = structuredClone(session.getBranch());
   const result = h.context(native)!;
-  assert.equal(result.messages!.length, native.length + 1);
+  assert.equal(result.messages.length, native.length + 1);
   assert.deepEqual(native, original);
   native.forEach((message, index) =>
-    assert.equal(result.messages![index], message),
+    assert.equal(result.messages[index], message),
   );
-  assert.equal(result.messages!.at(-1)!.role, "custom");
-  assert.equal(
-    session.getBranch().filter((entry) => entry.type === "custom_message")
-      .length,
-    0,
-  );
+  assert.ok(Buffer.byteLength(notice(result.messages)) < 2000);
+  assert.deepEqual(session.getBranch(), entries);
+  assert.equal(h.runtime.active, true);
+  assert.equal(h.runtime.taskOmitted, false);
 });
 
-test("exact original user blocks survive repeated compaction and session reload", async (t) => {
+test("historical user text, credentials, diagnostics and review/check payloads are not replayed", () => {
   const session = SessionManager.inMemory();
-  const original = "Only pi/continuity.ts.\r\n  No commits.\n";
-  const first = user(session, original);
-  const second = session.appendMessage({
-    role: "user",
-    content: [
-      { type: "text", text: 'Check "quoted" constraints' },
-      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
-      { type: "text", text: "\nThen stop. " },
-    ],
+  // Synthetic sentinels, not real credentials. Include non-patterned sensitive
+  // text: regex redaction cannot guarantee that arbitrary history is safe.
+  const secrets = [
+    "test-only-api-key-value-123",
+    "private coordinator instruction",
+    "diagnostic-private-value",
+    "check-private-value",
+    "review-private-value",
+  ];
+  user(session, `API_KEY=${secrets[0]}\n${secrets[1]}`);
+  session.appendMessage({
+    role: "toolResult",
+    toolName: "bash",
+    toolCallId: "failed-call",
+    isError: true,
+    content: [{ type: "text", text: secrets[2]! }],
     timestamp: 2,
   });
+  session.appendCustomEntry("jevons.checks", {
+    results: [{ passed: false, output: secrets[3] }],
+  });
+  session.appendCustomMessageEntry("jevons", secrets[4]!, true, {
+    fingerprint: "old-revision",
+    status: "review",
+    findings: [{ criterion: secrets[4] }],
+    omitted: [],
+    evaluations: [],
+  });
   compact(session);
-  const firstEvidence = records(session);
-  user(session, "Continue");
+  const h = harness(session);
+  const output = JSON.stringify(h.context()!.messages);
+  for (const secret of secrets) assert.ok(!output.includes(secret));
+  assert.equal(h.notifications.length, 0);
+});
+
+test("growing historical user text and repeated compactions cannot overflow the continuity notice", () => {
+  const session = SessionManager.inMemory();
+  user(session, "Initial request");
   compact(session);
-  const evidence = records(session);
-  assert.deepEqual(evidence.slice(0, firstEvidence.length), firstEvidence);
+  const h = harness(session);
+  const initial = notice(h.context()!.messages);
+  for (let round = 0; round < 3; round++) {
+    for (let i = 0; i < 100; i++)
+      user(session, `Historical coordinator update ${i}: ${"🦉".repeat(1000)}`);
+    compact(session);
+    const native = session.buildSessionContext().messages;
+    for (let request = 0; request < 10; request++) {
+      const result = h.context(native)!;
+      assert.equal(notice(result.messages), initial);
+      assert.equal(result.messages.length, native.length + 1);
+    }
+  }
+  assert.equal(h.notifications.length, 0);
+  assert.equal(h.runtime.taskOmitted, false);
+  // A separate task-evidence omission must not be silently cleared either.
+  h.runtime.taskOmitted = true;
+  h.context();
+  assert.equal(h.runtime.taskOmitted, true);
+});
+
+test("reprocessing context replaces legacy supplements without accumulating duplicate messages", () => {
+  const session = SessionManager.inMemory();
+  compact(session);
+  const h = harness(session);
+  const native = session.buildSessionContext().messages;
+  const stale = legacySupplement("synthetic-old-sensitive-text");
+  const other = { ...stale, customType: "other-extension", content: "Keep me" };
+  const input = [...native, stale, other, stale];
+  const result = h.context(input)!.messages;
+  assert.deepEqual(result.slice(0, -1), [...native, other]);
+  assert.ok(!JSON.stringify(result).includes("synthetic-old-sensitive-text"));
+  assert.deepEqual(h.context(result)!.messages, result);
+  assert.equal(input.length, native.length + 3);
+  h.runtime.active = false;
+  assert.deepEqual(h.context(result)!.messages, [...native, other]);
+});
+
+test("branch navigation uses only current native context, including branch summaries", () => {
+  const session = SessionManager.inMemory();
+  const root = user(session, "Root request");
+  user(session, "Abandoned instruction");
+  compact(session);
+  const h = harness(session);
+  h.context();
+  session.branch(root);
+  assert.equal(h.context(), undefined);
+  // Even a cached supplement must disappear when returning to uncompacted context.
+  const native = session.buildSessionContext().messages;
   assert.deepEqual(
-    evidence.find((item) => item.entryId === first)?.textBlocks,
-    [{ index: 0, text: original }],
+    h.context([...native, legacySupplement("abandoned supplement")])!.messages,
+    native,
   );
-  assert.deepEqual(
-    evidence.find((item) => item.entryId === second)?.textBlocks,
-    [
-      { index: 0, text: 'Check "quoted" constraints' },
-      { index: 2, text: "\nThen stop. " },
-    ],
-  );
-  assert.equal(
-    evidence.find((item) => item.entryId === second)?.omittedNonTextBlocks,
-    1,
-  );
+  session.branchWithSummary(root, "Native branch summary");
+  const branchContext = session.buildSessionContext().messages;
+  const result = h.context(branchContext)!.messages;
+  assert.deepEqual(result.slice(0, -1), branchContext);
+  assert.ok(!JSON.stringify(result).includes("Abandoned instruction"));
+  assert.ok(Buffer.byteLength(notice(result)) < 2000);
+  assert.equal(h.notifications.length, 0);
+});
+
+test("session reload retains native continuity without restoring old user text", async (t) => {
+  const session = SessionManager.inMemory();
+  user(session, "synthetic-private-history");
+  compact(session);
   const dir = await mkdtemp(join(tmpdir(), "jevons-continuity-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = join(dir, "session.jsonl");
@@ -145,219 +214,7 @@ test("exact original user blocks survive repeated compaction and session reload"
       .join("\n") + "\n",
   );
   const restored = SessionManager.open(file);
-  assert.deepEqual(
-    continuityEvidence(restored.getBranch()),
-    continuityEvidence(session.getBranch()),
-  );
-});
-
-test("branch navigation excludes abandoned evidence, including after re-registration", () => {
-  const session = SessionManager.inMemory();
-  const root = user(session, "Shared original constraint");
-  user(session, "ABANDONED_USER_TEXT");
-  session.appendMessage({
-    role: "toolResult",
-    toolName: "bash",
-    toolCallId: "abandoned-call",
-    isError: true,
-    content: [{ type: "text", text: "ABANDONED_FAILURE" }],
-    timestamp: 2,
-  });
-  compact(session);
-  const h = harness(session);
-  const abandoned = h.context()!.messages!.at(-1)!;
-  assert.ok(abandoned.role === "custom");
-  assert.match(abandoned.content as string, /ABANDONED_FAILURE/);
-  session.branch(root);
-  assert.equal(h.context(), undefined);
-  user(session, "Current branch constraint");
-  compact(session);
-  assert.ok(session.getEntries().length > session.getBranch().length);
-  for (const instance of [h, harness(session)]) {
-    const message = instance.context()!.messages!.at(-1)!;
-    assert.ok(message.role === "custom");
-    assert.match(message.content as string, /Current branch constraint/);
-    assert.doesNotMatch(message.content as string, /ABANDONED/);
-  }
-});
-
-test("failed tool call IDs and bounded diagnostic excerpts persist despite later success", () => {
-  const session = SessionManager.inMemory();
-  user(session, "Fix failing checks");
-  const output =
-    "Failure start: " + "🦉".repeat(2000) + "\nExpected 2 but got 3";
-  session.appendMessage({
-    role: "toolResult",
-    toolName: "bash",
-    toolCallId: "failed-call",
-    isError: true,
-    content: [{ type: "text", text: output }],
-    timestamp: 2,
-  });
-  session.appendMessage({
-    role: "toolResult",
-    toolName: "bash",
-    toolCallId: "successful-call",
-    isError: false,
-    content: [{ type: "text", text: "unrelated success" }],
-    timestamp: 3,
-  });
-  compact(session);
-  const failure = records(session).find((item) => item.kind === "toolFailure")!;
-  assert.equal(failure.toolCallId, "failed-call");
-  assert.equal(failure.resolution, "unknown");
-  assert.ok(output.startsWith(failure.diagnostic.head));
-  assert.ok(output.endsWith(failure.diagnostic.tail));
-  assert.equal(failure.diagnostic.sourceBytes, Buffer.byteLength(output));
-  assert.equal(
-    failure.diagnostic.omittedBytes,
-    Buffer.byteLength(output) -
-      Buffer.byteLength(failure.diagnostic.head) -
-      Buffer.byteLength(failure.diagnostic.tail),
-  );
-  assert.doesNotMatch(JSON.stringify(failure), /�/);
-  assert.ok(continuityEvidence(session.getBranch())!.bytes <= CONTINUITY_BYTES);
-});
-
-test("custom and tool reviews preserve findings, probabilities, models and historical check provenance", () => {
-  const session = SessionManager.inMemory();
-  user(session, "Review changes and run checks");
-  const report: DiffReport = {
-    status: "review",
-    complete: false,
-    fingerprint: "reviewed-revision",
-    comparison: "working copy",
-    files: ["src/a.ts"],
-    reviewedChunks: 1,
-    totalChunks: 2,
-    findings: [
-      {
-        id: "chunk-1",
-        path: "src/a.ts",
-        oldPath: "src/a.ts",
-        oldStart: 1,
-        newStart: 1,
-        oldLines: 1,
-        newLines: 1,
-        added: 1,
-        deleted: 1,
-        rule: "correctness",
-        label: "Correctness",
-        criterion: "Visible defect",
-        probability: 0.91,
-        status: "concern",
-      },
-    ],
-    omitted: ["second chunk not reviewed"],
-    evaluations: [
-      {
-        model: "jev-actual-version",
-        answers: { q: { type: "noul", noul: 0.91 } },
-        usage: { input_tokens: 20, output_tokens: 5 },
-        elapsedMs: 10,
-      },
-    ],
-    questionMaps: [],
-  };
-  const customId = session.appendCustomMessageEntry(
-    "jevons",
-    "Review text",
-    true,
-    report,
-  );
-  session.appendMessage({
-    role: "toolResult",
-    toolName: "jevons_review",
-    toolCallId: "review-call",
-    isError: false,
-    content: [{ type: "text", text: "Review text" }],
-    details: report,
-    timestamp: 2,
-  });
-  session.appendCustomEntry("jevons.checks", {
-    results: [
-      {
-        name: "tests",
-        passed: false,
-        output: "Expected true",
-        elapsedMs: 12,
-        exitCode: null,
-        termination: "timeout",
-        omittedBytes: 137,
-      },
-    ],
-    revision: "old-revision",
-    taskRevision: 4,
-    observedAt: 100,
-  });
-  session.appendCustomEntry("jevons.checks", {
-    results: [
-      {
-        name: "tests",
-        passed: true,
-        output: "passed",
-        elapsedMs: 12,
-        exitCode: 0,
-        termination: "exit",
-        omittedBytes: 0,
-      },
-    ],
-    revision: "later-revision",
-    taskRevision: 5,
-    observedAt: 200,
-  });
-  compact(session);
-  const evidence = records(session);
-  const reviews = evidence.filter((item) => item.kind === "review");
-  assert.equal(reviews.length, 2);
-  assert.equal(
-    reviews.find((item) => item.entryId === customId)?.complete,
-    false,
-  );
-  assert.deepEqual(reviews[0]!.omitted, report.omitted);
-  const findings = evidence.filter((item) => item.kind === "reviewFinding");
-  assert.equal(findings.length, 2);
-  assert.deepEqual(findings[0]!.finding, report.findings[0]);
-  assert.deepEqual(findings[0]!.models, ["jev-actual-version"]);
-  assert.equal(findings[0]!.fingerprint, "reviewed-revision");
-  assert.equal(findings[0]!.toolCallId, "review-call");
-  const checks = evidence.filter((item) => item.kind === "check");
-  assert.equal(checks.length, 2);
-  assert.equal(checks[0]!.passed, true);
-  assert.equal(checks[1]!.passed, false);
-  assert.equal(checks[1]!.revision, "old-revision");
-  assert.equal(checks[1]!.taskRevision, 4);
-  assert.equal(checks[1]!.checkObservedAt, 100);
-  assert.equal(checks[1]!.exitCode, null);
-  assert.equal(checks[1]!.termination, "timeout");
-  assert.equal(checks[1]!.omittedBytes, 137);
-  assert.equal(checks[1]!.diagnostic.omittedBytes, 0);
-  assert.equal(checks[0]!.exitCode, 0);
-  assert.equal(checks[0]!.termination, "exit");
-  assert.equal(checks[0]!.omittedBytes, 0);
-  checks.forEach((check) => assert.match(check.freshness, /not current proof/));
-});
-
-test("protected evidence overflow stays bounded and disables only Jevons automation, not native tools", () => {
-  const session = SessionManager.inMemory();
-  const oversized = user(session, "🦉".repeat(CONTINUITY_BYTES));
-  for (let i = 0; i < 300; i++)
-    user(session, `Constraint ${i}: ${"x".repeat(300)}`);
-  compact(session);
-  const evidence = continuityEvidence(session.getBranch())!;
-  assert.ok(evidence.overflow);
-  assert.ok(evidence.bytes <= CONTINUITY_BYTES);
-  assert.equal(evidence.bytes, Buffer.byteLength(evidence.content));
-  assert.ok(evidence.omitted.records > 1);
-  assert.ok(evidence.omitted.bytes > CONTINUITY_BYTES);
-  assert.ok(evidence.omitted.firstEntryIds.includes(oversized));
-  assert.ok(evidence.omitted.firstEntryIds.length <= 8);
-  assert.match(evidence.content, /Consult original session entries/);
-  const h = harness(session);
-  const native = session.buildSessionContext().messages;
-  assert.equal(h.context(native)!.messages!.length, native.length + 1);
-  assert.equal(h.runtime.taskOmitted, true);
-  assert.equal(h.runtime.active, true);
-  assert.equal(h.notifications.length, 1);
-  assert.deepEqual(h.registered, ["context"]);
+  const result = harness(restored).context()!.messages;
+  assert.deepEqual(result, harness(session).context()!.messages);
+  assert.ok(!JSON.stringify(result).includes("synthetic-private-history"));
 });
