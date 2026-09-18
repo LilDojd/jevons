@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, rm, writeFile, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { registerAutopilot } from "../pi/autopilot.ts";
+import { Runtime } from "../pi/runtime.ts";
+import { defaultPolicy } from "../pi/policy.ts";
 import { assessTool, planTask } from "../src/autopilot.ts";
 import type {
   Answer,
@@ -67,7 +77,7 @@ const positive = evaluator((_id, question) =>
     : { type: "noul", noul: 0.9 },
 );
 
-test("planning skips disabled, absent and lexically unrelated candidates without evaluation", async () => {
+test("planning skips disabled and absent candidates without evaluation", async () => {
   for (const [task, skills, models, settings] of [
     [
       "Database",
@@ -76,7 +86,6 @@ test("planning skips disabled, absent and lexically unrelated candidates without
       { ...policy, skills: false, models: "off" as const },
     ],
     ["Database", [], [], policy],
-    ["Database", [skill("cooking", "Recipes and baking")], [], policy],
     [
       "Database",
       [],
@@ -153,37 +162,87 @@ test("skill relevance is independent per named item and paths remain local", asy
   assert.match(plan.coverage, /3 of 3 assessed; 0 omitted/);
 });
 
-test("lexical ranking bounds the shortlist to twelve and discloses unjudged omissions", async () => {
-  const skills = Array.from({ length: 20 }, (_, index) =>
-    skill(`candidate-${index}`, "Database"),
-  );
-  skills.push(skill("best", "Database query analysis"));
-  skills.push(skill("oversized", "Database".repeat(300)));
+test("semantic utility reverses input order and retains zero-overlap synonyms", async () => {
+  const skills = [
+    skill("slow-searches", "Discuss slow searches as a general topic"),
+    skill("baking", "Pastry recipes"),
+    skill("query-tuning", "Optimize database indexes and execution plans"),
+    skill("profiling", "Trace database bottlenecks"),
+    skill("metrics", "Measure database latency"),
+  ];
+  const probabilities = [0.81, 0.01, 0.99, 0.94, 0.91];
   const plan = await planTask(
-    "Database query analysis",
+    "Speed up slow searches",
     skills,
     [],
     current,
     policy,
-    async (request) => {
-      assert.equal(Object.keys(request.questions).length, 12);
-      assert.ok(Buffer.byteLength(JSON.stringify(request)) <= 48_000);
-      return positive(request);
-    },
+    evaluator((id) => ({
+      type: "noul",
+      noul: probabilities[Number(id.slice(5))]!,
+    })),
   );
-  assert.equal(plan.skills.length, 12);
-  assert.equal(plan.skills[0]!.name, "best");
-  assert.equal(plan.skills[11]!.name, "candidate-10");
-  assert.match(plan.coverage, /12 of 22 assessed; 10 omitted/);
-  assert.match(plan.coverage, /not judged/);
+  assert.deepEqual(
+    plan.skills.map((item) => item.name),
+    ["query-tuning", "profiling", "metrics"],
+  );
+  assert.match(plan.coverage, /5 of 5 assessed; 0 omitted/);
+  assert.match(plan.coverage, /1 qualifying skills omitted/);
+  assert.equal(plan.evaluation!.answers.skill0!.type, "noul");
 });
 
-test("bounded invalid metadata, duplicate skills and zero-overlap skills are omitted explicitly", async () => {
+test("candidate admission has explicit count and serialized byte bounds, not lexical ranking", async () => {
+  for (const description of ["Database", "\u0000".repeat(900)]) {
+    const skills = Array.from({ length: 520 }, (_, index) =>
+      skill(`candidate-${index}`, description),
+    );
+    let assessed = 0;
+    const plan = await planTask(
+      "Database",
+      skills,
+      profiles,
+      current,
+      policy,
+      async (request) => {
+        assessed = Object.keys(request.questions).length - 1;
+        assert.ok(assessed > 0 && assessed <= 31);
+        assert.ok(Buffer.byteLength(JSON.stringify(request)) <= 48_000);
+        assert.ok(
+          Buffer.byteLength(JSON.stringify(request.state)) +
+            Math.max(
+              ...Object.values(request.questions).map((question) =>
+                Buffer.byteLength(JSON.stringify(question)),
+              ),
+            ) <=
+            24_000,
+        );
+        return positive(request);
+      },
+    );
+    if (description === "Database") assert.equal(assessed, 31);
+    else assert.ok(assessed < 31);
+    assert.deepEqual(
+      plan.skills.map((item) => item.name),
+      ["candidate-0", "candidate-1", "candidate-2"],
+    );
+    assert.match(
+      plan.coverage,
+      new RegExp(`${assessed} of 520 assessed; ${520 - assessed} omitted`),
+    );
+    assert.match(plan.coverage, /512-item scan limit 8/);
+    assert.match(plan.coverage, /not judged/);
+  }
+});
+
+test("invalid metadata, duplicate and explicit-only skills are omitted, unrelated skills can select none", async () => {
   const skills = [
     skill("database"),
     skill("database"),
     skill("empty", ""),
-    skill("cooking", "Recipes"),
+    {
+      ...skill("explicit", "Never submit this metadata"),
+      disableModelInvocation: true,
+    },
   ];
   const plan = await planTask(
     "Database",
@@ -191,10 +250,28 @@ test("bounded invalid metadata, duplicate skills and zero-overlap skills are omi
     [],
     current,
     policy,
-    positive,
+    async (request) => {
+      assert.ok(!JSON.stringify(request).includes("Never submit"));
+      return positive(request);
+    },
   );
   assert.equal(plan.skills.length, 1);
   assert.match(plan.coverage, /1 of 4 assessed; 3 omitted/);
+  assert.match(
+    plan.coverage,
+    /explicit-only 1, invalid metadata 1, duplicate 1/,
+  );
+  const irrelevant = await planTask(
+    "Database",
+    [skill("cooking", "Recipes"), skill("music", "Piano lessons")],
+    [],
+    current,
+    policy,
+    evaluator(() => ({ type: "noul", noul: 0.01 })),
+  );
+  assert.deepEqual(irrelevant.skills, []);
+  assert.match(irrelevant.coverage, /2 of 2 assessed/);
+  assert.match(irrelevant.coverage, /2 below the relevance threshold/);
   const none = await planTask(
     "Database",
     [skill("empty", "")],
@@ -376,13 +453,8 @@ test("tool assessment carries the goal and reports specific independent concerns
   assert.equal(mismatch.status, "concern");
 });
 
-test("failure and repeat signals are deterministic and cannot be averaged away", async () => {
-  for (const [count, status] of [
-    [0, "no-concern"],
-    [1, "uncertain"],
-    [2, "concern"],
-    [100, "concern"],
-  ] as const) {
+test("failure counts remain evidence but cannot promote an otherwise unconcerning call", async () => {
+  for (const count of [0, 1, 2, 100]) {
     const report = await assessTool(
       "Run tests",
       { name: "bash", input: { command: "bun test" } },
@@ -399,7 +471,7 @@ test("failure and repeat signals are deterministic and cannot be averaged away",
         });
       },
     );
-    assert.equal(report.status, status);
+    assert.equal(report.status, "no-concern");
     assert.equal(report.signals.recentFailures, count);
   }
   const uncertain = await assessTool(
@@ -457,6 +529,79 @@ test("oversized tool evidence, invalid counts and incomplete assessments fail wi
     ),
     /Missing Noul/,
   );
+});
+
+test("optional loading preserves native instructions and enforces body, total and discovered-file limits", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "jev-autopilot-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const handlers = new Map<
+    string,
+    (event: any, ctx: ExtensionContext) => any
+  >();
+  const pi = {
+    on: (name: string, handler: (event: any, ctx: ExtensionContext) => any) =>
+      handlers.set(name, handler),
+  } as unknown as ExtensionAPI;
+  const runtime = new Runtime(pi);
+  runtime.active = true;
+  runtime.policy = {
+    ...defaultPolicy,
+    autopilot: { ...policy, models: "off" },
+    profiles: [],
+  };
+  runtime.evaluator = () => positive;
+  registerAutopilot(pi, runtime);
+  const ctx = {
+    model: { provider: "test", id: "current" },
+    scopedModels: [],
+    modelRegistry: { getAvailable: () => [] },
+    getContextUsage: () => undefined,
+    sessionManager: { getBranch: () => [] },
+    hasUI: false,
+  } as unknown as ExtensionContext;
+  const native =
+    "Native explicit and mandatory skill instructions must remain here.";
+  const skills = ["first", "second", "third", "undiscovered"].map((name) => ({
+    name,
+    description: "Task guidance",
+    filePath: join(root, name),
+  }));
+  await writeFile(skills[0]!.filePath, "a".repeat(11000));
+  await writeFile(skills[1]!.filePath, "b".repeat(10000));
+  await writeFile(skills[2]!.filePath, "THIRD_BODY");
+  await writeFile(skills[3]!.filePath, "UNDISCOVERED_BODY");
+  const run = async (discovered: typeof skills, text = "Task") => {
+    handlers.get("input")!({ source: "interactive", text }, ctx);
+    return handlers.get("before_agent_start")!(
+      {
+        prompt: text,
+        systemPrompt: native,
+        systemPromptOptions: { skills: discovered },
+      },
+      ctx,
+    );
+  };
+  const loaded = await run(skills.slice(0, 3));
+  assert.ok(loaded.systemPrompt.startsWith(native));
+  assert.ok(loaded.systemPrompt.includes("a".repeat(11000)));
+  assert.ok(!loaded.systemPrompt.includes("b".repeat(10000)));
+  assert.ok(loaded.systemPrompt.includes("THIRD_BODY"));
+  assert.ok(!loaded.systemPrompt.includes("UNDISCOVERED_BODY"));
+  assert.match(loaded.message.content, /Skill omitted: second/);
+  await writeFile(skills[0]!.filePath, "é".repeat(6001));
+  await rm(skills[1]!.filePath);
+  await symlink(skills[3]!.filePath, skills[1]!.filePath);
+  const bounded = await run(skills.slice(0, 3));
+  assert.ok(!bounded.systemPrompt.includes("é".repeat(6001)));
+  assert.ok(!bounded.systemPrompt.includes("UNDISCOVERED_BODY"));
+  assert.ok(bounded.systemPrompt.includes("THIRD_BODY"));
+  assert.match(bounded.message.content, /Skill omitted: first/);
+  assert.match(bounded.message.content, /Skill omitted: second/);
+  runtime.evaluator = () => evaluator(() => ({ type: "noul", noul: 0.01 }));
+  const none = await run(skills.slice(0, 3));
+  assert.equal(none.systemPrompt, native);
+  assert.match(none.message.content, /Selected 0/);
+  assert.equal(await run(skills, "/skill:first"), undefined);
 });
 
 test("cancellation is forwarded, stale results discarded and service failures not retried", async () => {

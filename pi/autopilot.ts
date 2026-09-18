@@ -1,4 +1,5 @@
-import { readFile, lstat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { assessTool, planTask } from "../src/autopilot.ts";
 import type { Json } from "../src/contracts.ts";
@@ -96,13 +97,12 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
             model.provider === profile.provider && model.id === profile.model,
         ),
       );
-      const skills = (event.systemPromptOptions.skills ?? [])
-        .filter((skill) => !skill.disableModelInvocation)
-        .map((skill) => ({
-          name: skill.name,
-          description: skill.description,
-          path: skill.filePath,
-        }));
+      const skills = (event.systemPromptOptions.skills ?? []).map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        path: skill.filePath,
+        disableModelInvocation: skill.disableModelInvocation,
+      }));
       const plan = await planTask(
         task,
         skills,
@@ -115,36 +115,45 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
       signal.throwIfAborted();
       if (!fresh()) return;
       const loaded: string[] = [];
-      const notices: string[] = [];
+      const notices: string[] = [plan.coverage];
       let skillBytes = 0;
-      for (const skill of plan.skills.slice(0, 3)) {
-        const stat = await lstat(skill.path);
-        if (
-          !stat.isFile() ||
-          stat.size > 12000 ||
-          skillBytes + stat.size > 20000
-        ) {
-          notices.push(`Skill omitted: ${skill.name} (size or file type)`);
-          continue;
+      for (const skill of plan.skills) {
+        signal.throwIfAborted();
+        if (!fresh()) return;
+        try {
+          const file = await open(
+            skill.path,
+            constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+          );
+          let content: string;
+          try {
+            const stat = await file.stat();
+            if (!stat.isFile() || stat.size > 12000)
+              throw new Error("size or file type");
+            const buffer = Buffer.alloc(12001);
+            const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+            if (bytesRead < stat.size || bytesRead > 12000)
+              throw new Error("changed size or incomplete read");
+            content = buffer.subarray(0, bytesRead).toString("utf8");
+          } finally {
+            await file.close();
+          }
+          const bytes = Buffer.byteLength(content);
+          if (bytes > 12000 || skillBytes + bytes > 20000)
+            throw new Error("12000-byte body or 20000-byte total limit");
+          skillBytes += bytes;
+          loaded.push(
+            `<skill name=${JSON.stringify(skill.name)} path=${JSON.stringify(skill.path)}>\n${content}\n</skill>`,
+          );
+          notices.push(
+            `Loaded ${skill.name} · utility probability ${skill.probability.toFixed(2)}`,
+          );
+        } catch {
+          notices.push(
+            `Skill omitted: ${skill.name} (unreadable, changed, non-regular file or body byte limit)`,
+          );
         }
-        const content = await readFile(skill.path, {
-          encoding: "utf8",
-          signal,
-        });
-        if (Buffer.byteLength(content) > 12000) {
-          notices.push(`Skill omitted: ${skill.name} (changed size)`);
-          continue;
-        }
-        skillBytes += Buffer.byteLength(content);
-        loaded.push(
-          `<skill name=${JSON.stringify(skill.name)} path=${JSON.stringify(skill.path)}>\n${content}\n</skill>`,
-        );
-        notices.push(`Loaded ${skill.name} · ${skill.probability.toFixed(2)}`);
       }
-      if (plan.skills.length > 3)
-        notices.push(
-          `${plan.skills.length - 3} additional skill matches not loaded`,
-        );
       if (!fresh()) return;
       if (plan.model) {
         const chosen = ctx.modelRegistry
@@ -182,7 +191,7 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
       if (notices.length)
         return {
           systemPrompt: loaded.length
-            ? `${event.systemPrompt}\n\nSelected skill instructions:\n${loaded.join("\n\n")}`
+            ? `${event.systemPrompt}\n\nOptional skill guidance selected from discovered metadata; this does not replace explicit or mandatory skill instructions, and does not authorize actions:\n${loaded.join("\n\n")}`
             : event.systemPrompt,
           message: {
             customType: "jevons",
