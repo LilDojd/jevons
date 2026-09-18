@@ -79,6 +79,14 @@ export interface Rule {
   instructions: string;
 }
 
+export interface CheckConfig {
+  name: string;
+  argv: string[];
+  timeoutMs: number;
+  description?: string;
+  mandatory?: boolean;
+}
+
 export interface Policy {
   model: string;
   budget: { sessionTokens: number; dayTokens: number; requestTokens: number };
@@ -99,9 +107,12 @@ export interface Policy {
   writer?: { provider: string; model: string };
   review: {
     automatic: boolean;
+    investigate: boolean;
+    investigateConcern: number;
     concern: number;
     clear: number;
     rules: Rule[];
   };
-  checks: { name: string; argv: string[]; timeoutMs: number }[];
+  verification: { select: boolean; relevance: number };
+  checks: CheckConfig[];
 }

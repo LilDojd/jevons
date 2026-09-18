@@ -18,6 +18,8 @@ export const defaultPolicy: Policy = {
   profiles: [],
   review: {
     automatic: true,
+    investigate: false,
+    investigateConcern: 0.9,
     concern: 0.8,
     clear: 0.2,
     rules: [
@@ -47,10 +49,10 @@ export const defaultPolicy: Policy = {
       },
     ],
   },
+  verification: { select: true, relevance: 0.6 },
   checks: [],
 };
 const text = Type.String({ minLength: 1, maxLength: 4000, pattern: "\\S" });
-const positive = Type.Integer({ minimum: 1, maximum: 1000000000 });
 const model = Type.Object(
   { provider: text, model: text },
   { additionalProperties: false },
@@ -60,8 +62,8 @@ const schema = Type.Object(
     model: text,
     budget: Type.Object(
       {
-        sessionTokens: positive,
-        dayTokens: positive,
+        sessionTokens: Type.Integer({ minimum: 1, maximum: 1000000000 }),
+        dayTokens: Type.Integer({ minimum: 1, maximum: 1000000000 }),
         requestTokens: Type.Integer({ minimum: 4096, maximum: 65536 }),
       },
       { additionalProperties: false },
@@ -104,6 +106,8 @@ const schema = Type.Object(
     review: Type.Object(
       {
         automatic: Type.Boolean(),
+        investigate: Type.Boolean(),
+        investigateConcern: Type.Number({ minimum: 0.5, maximum: 1 }),
         concern: Type.Number({ minimum: 0.5, maximum: 1 }),
         clear: Type.Number({ minimum: 0, maximum: 0.5 }),
         rules: Type.Array(
@@ -120,10 +124,19 @@ const schema = Type.Object(
       },
       { additionalProperties: false },
     ),
+    verification: Type.Object(
+      {
+        select: Type.Boolean(),
+        relevance: Type.Number({ minimum: 0.5, maximum: 1 }),
+      },
+      { additionalProperties: false },
+    ),
     checks: Type.Array(
       Type.Object(
         {
           name: text,
+          description: Type.Optional(text),
+          mandatory: Type.Optional(Type.Boolean()),
           argv: Type.Array(text, { minItems: 1, maxItems: 32 }),
           timeoutMs: Type.Integer({ minimum: 100, maximum: 120000 }),
         },
@@ -158,6 +171,7 @@ export async function loadPolicy(root: string): Promise<Policy> {
     autopilot: { ...defaultPolicy.autopilot, ...raw.autopilot },
     review: { ...defaultPolicy.review, ...raw.review },
     recovery: { ...defaultPolicy.recovery, ...raw.recovery },
+    verification: { ...defaultPolicy.verification, ...raw.verification },
   };
   if (!Value.Check(schema, policy))
     throw new Error(

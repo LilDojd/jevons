@@ -15,6 +15,8 @@ import { parseDiff } from "../pi/diff.ts";
 function policy(overrides: Partial<Policy["review"]> = {}): Policy["review"] {
   return {
     automatic: true,
+    investigate: false,
+    investigateConcern: 0.9,
     concern: 0.8,
     clear: 0.2,
     rules: [
@@ -380,7 +382,7 @@ test("malformed provider responses and failures remain incomplete without copyin
   }
 });
 
-test("budget exhaustion keeps completed chunk coverage and stops without retry or leaking errors", async () => {
+test("provider failure keeps completed chunk coverage and stops without retry or leaking errors", async () => {
   const input = snapshot(
     Array.from({ length: 50 }, (_, index) => chunk(index)),
   );
@@ -388,7 +390,7 @@ test("budget exhaustion keeps completed chunk coverage and stops without retry o
   const report = await reviewDiff(input, policy(), async (request) => {
     if (++calls === 2)
       throw new Error(
-        "Session token budget exhausted; private provider payload",
+        "Provider temporarily unavailable; private provider payload",
       );
     const result = answer(request);
     result.answers.c0_r0 = { type: "noul", noul: 0.9 };
@@ -400,7 +402,7 @@ test("budget exhaustion keeps completed chunk coverage and stops without retry o
   assert.equal(report.totalChunks, 50);
   assert.equal(report.evaluations.length, 1);
   assert.equal(report.findings.length, 1);
-  assert.match(report.omitted.join(" "), /budget/i);
+  assert.match(report.omitted.join(" "), /unavailable/i);
   assert.ok(!JSON.stringify(report).includes("private provider payload"));
   const manyRules = policy({
     rules: Array.from({ length: 20 }, (_, index) => ({
