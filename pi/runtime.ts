@@ -135,6 +135,7 @@ export class Runtime {
       ? new Jev({
           model: policy.model,
           record: (receipt) => {
+            // appendEntry targets the current session, not the request's old session.
             if (this.sessionId === sessionId)
               this.pi.appendEntry("jevons.receipt", receipt);
           },

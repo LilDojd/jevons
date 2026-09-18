@@ -122,8 +122,19 @@ const fields = [
 ] as const;
 
 type Field = (typeof fields)[number];
-const valueOf = (policy: Policy, field: Field): unknown =>
-  (policy[field[0]] as unknown as Record<string, unknown>)[field[1]];
+function valueOf(policy: Policy, field: Field): boolean | number | string {
+  const [group, key] = field;
+  switch (group) {
+    case "autopilot":
+      return policy.autopilot[key];
+    case "recovery":
+      return policy.recovery[key];
+    case "review":
+      return policy.review[key];
+    case "verification":
+      return policy.verification[key];
+  }
+}
 const displayValue = (value: unknown) =>
   typeof value === "boolean" ? (value ? "on" : "off") : String(value);
 
