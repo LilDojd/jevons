@@ -1,0 +1,6 @@
+node_modules/
+.devenv/
+.direnv/
+.jevons/
+result
+*.tgz
