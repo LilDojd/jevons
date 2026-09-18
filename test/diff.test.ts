@@ -346,6 +346,46 @@ for (const vcs of ["jj", "git"] as const) {
   });
 }
 
+test("local collection stops at a nested Git repository rather than selecting outer Jujutsu", async (t) => {
+  const fixture = await fakeCommands(t, {
+    patch: gitPatch("a.ts", "old\n", "new\n"),
+    head: "a".repeat(40),
+    revision: "b".repeat(40),
+  });
+  await fs.mkdir(join(fixture.root, ".jj"));
+  const nested = join(fixture.root, "nested");
+  await fs.mkdir(join(nested, ".git"), { recursive: true });
+  const snapshot = await collectLocalDiff(nested, []);
+  assert.equal(
+    snapshot.comparison,
+    `git ${nested} ${"a".repeat(40)}..working-copy`,
+  );
+  assert.deepEqual(snapshot.files, ["a.ts"]);
+  assert.deepEqual(snapshot.omitted, []);
+  assert.doesNotMatch(
+    await fs.readFile(fixture.calls, "utf8"),
+    /"binary":"jj"/,
+  );
+});
+
+test("remote collection rejects deceptive destinations before invoking gh", async (t) => {
+  const fixture = await fakeCommands(t, {});
+  for (const url of [
+    "http://github.com/example/project/pull/12",
+    "https://github.com.evil.invalid/example/project/pull/12",
+    "https://github.com@evil.invalid/example/project/pull/12",
+    "https://evil.invalid@github.com/example/project/pull/12",
+    "https://github.com:8443/example/project/pull/12",
+    "https://github.com/example/project/pull/12?redirect=https://evil.invalid",
+    "https://github.com/example/project/pull/12#fragment",
+    "https://github.com/example/%2e%2e/pull/12",
+    "https://github.com/example/project/pull/12/../../elsewhere",
+    "https://github.com/example\\project/pull/12",
+  ])
+    await assert.rejects(collectPullRequestDiff(url), /Expected a GitHub/);
+  await assert.rejects(fs.stat(fixture.calls), { code: "ENOENT" });
+});
+
 test("remote collection requests only a pinned comparison diff and invalidates moved revisions", async (t) => {
   const base = "a".repeat(40),
     head = "b".repeat(40);
@@ -367,6 +407,11 @@ test("remote collection requests only a pinned comparison diff and invalidates m
   );
   assert.ok(calls[1].args.includes("Accept: application/vnd.github.diff"));
   assert.ok(calls.every((call) => call.args.includes("GET")));
+  assert.ok(
+    calls.every(
+      (call) => call.args[call.args.indexOf("--hostname") + 1] === "github.com",
+    ),
+  );
   await fs.writeFile(fixture.calls, "");
   await fs.writeFile(
     fixture.fixture,

@@ -67,6 +67,23 @@ test("SDK request retains actual tokens and model without provider extras or spe
   assert.ok(!JSON.stringify(receipts).includes(request.state.task));
 });
 
+test("TypeSafe destination stays pinned despite an ambient SDK base URL override", async (t) => {
+  const before = process.env.TYPESAFE_BASE_URL;
+  process.env.TYPESAFE_BASE_URL = "http://127.0.0.1:12345/untrusted";
+  t.after(() => {
+    if (before === undefined) delete process.env.TYPESAFE_BASE_URL;
+    else process.env.TYPESAFE_BASE_URL = before;
+  });
+  const destinations: unknown[] = [];
+  const { jev } = fixture(async (url, init) => {
+    destinations.push(url);
+    assert.equal(init?.redirect, "error");
+    return response();
+  });
+  await jev.evaluate("Review", request);
+  assert.deepEqual(destinations, ["https://api.typesafe.ai/v1/systemone"]);
+});
+
 test("network failures count unknown usage without retries or blocking later explicit calls", async () => {
   let calls = 0;
   const { jev, receipts } = fixture(async () => {

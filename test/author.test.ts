@@ -384,6 +384,67 @@ test("scope and availability revocation discard output at publication and payloa
   }
 });
 
+test("writer revocation at the fetch boundary prevents network dispatch", async (t) => {
+  let requests = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    requests++;
+    return new Response("");
+  });
+  const h = harness();
+  h.complete(async (_model, _context, options) => {
+    h.ctx.scopedModels = [{ model: h.ctx.model! }];
+    await options!.fetch!("http://localhost:11434/v1/chat/completions");
+    return response();
+  });
+  await assert.rejects(h.run(), failed);
+  assert.equal(requests, 0);
+});
+
+test("late transport responses are cancelled after lifetime or writer permission revocation", async (t) => {
+  for (const kind of ["lifetime", "permission"]) {
+    const started = Promise.withResolvers<void>();
+    const pending = Promise.withResolvers<Response>();
+    const discarded = Promise.withResolvers<void>();
+    const mock = t.mock.method(globalThis, "fetch", async () => {
+      started.resolve();
+      return pending.promise;
+    });
+    const h = harness();
+    h.complete(async (_model, _context, options) => {
+      await options!.fetch!("https://example.invalid/author");
+      return response();
+    });
+    const work = h.run();
+    const rejected = assert.rejects(work, failed);
+    await started.promise;
+    if (kind === "lifetime") {
+      h.controller.abort();
+      await rejected;
+    } else h.available.pop();
+    pending.resolve(
+      new Response(
+        new ReadableStream({
+          cancel() {
+            discarded.resolve();
+          },
+        }),
+      ),
+    );
+    await rejected;
+    await Promise.race([
+      discarded.promise,
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("Late response body not cancelled")),
+          1000,
+        );
+        discarded.promise.then(() => clearTimeout(timer));
+      }),
+    ]);
+    mock.mock.restore();
+  }
+});
+
 test("transport permits one nonredirecting request and bounds streamed response bytes", async (t) => {
   const requests: RequestInit[] = [];
   t.mock.method(

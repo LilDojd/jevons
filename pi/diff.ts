@@ -406,7 +406,7 @@ export async function collectLocalDiff(
           throw new Error("Repository unavailable.");
       }
     }
-    if (jj || dirname(cursor) === cursor) break;
+    if (jj || git || dirname(cursor) === cursor) break;
     cursor = dirname(cursor);
   }
   const directory = jj ?? git;

@@ -76,11 +76,22 @@ export async function authorQuestions(
       check();
       if (sent) throw new Error(FAILURE);
       sent = true;
+      const requestSignal = init?.signal
+        ? AbortSignal.any([signal, init.signal])
+        : signal;
       const response = await fetch(url, {
         ...init,
-        signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal,
+        signal: requestSignal,
         redirect: "error",
       });
+      try {
+        requestSignal.throwIfAborted();
+        check();
+      } catch {
+        // A transport can deliver a body after the caller has stopped waiting.
+        void response.body?.cancel().catch(() => {});
+        throw new Error(FAILURE);
+      }
       if (!response.body) return response;
       let bytes = 0;
       return new Response(
