@@ -5,6 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Runtime } from "./runtime.ts";
+import { openSettings } from "./settings.ts";
 import { registerAutopilot } from "./autopilot.ts";
 import { registerRecovery } from "./recovery.ts";
 import { registerContinuity } from "./continuity.ts";
@@ -28,6 +29,7 @@ import type { DiffReport } from "../src/diff-review.ts";
 
 export default function extension(pi: ExtensionAPI): void {
   const runtime = new Runtime(pi);
+  let editingSettings = false;
   registerPresentation(pi);
   registerContinuity(pi, runtime);
   registerAutopilot(pi, runtime);
@@ -52,6 +54,7 @@ export default function extension(pi: ExtensionAPI): void {
     runtime.restoreTask(ctx);
     runtime.failures = 0;
     runtime.jev = undefined;
+    runtime.policy = undefined;
     try {
       await runtime.enable(ctx, true);
     } catch (error) {
@@ -64,6 +67,7 @@ export default function extension(pi: ExtensionAPI): void {
   pi.on("session_before_tree", (_event, ctx) => runtime.pause(ctx));
   pi.on("session_tree", (_event, ctx) => {
     runtime.pause(ctx);
+    runtime.policy = undefined;
     runtime.edits.clear();
     runtime.restoreTask(ctx);
   });
@@ -301,7 +305,7 @@ export default function extension(pi: ExtensionAPI): void {
     );
   pi.registerCommand("jevons", {
     description:
-      "Jevons: enable, pause, ask, review, gates, usage and activity",
+      "Jevons: settings, enable, pause, ask, review, gates, usage and activity",
     getArgumentCompletions: (prefix) =>
       ["on", "pause", "ask", "review", "gate", "usage", "activity", "settings"]
         .filter((value) => value.startsWith(prefix))
@@ -325,7 +329,7 @@ export default function extension(pi: ExtensionAPI): void {
             "gate — Select checks, confirm execution, then review",
             "usage — Session token totals; no spending caps",
             "activity — Recent requests, models and token usage",
-            "settings — Inspect project policy",
+            "settings — Edit session settings now",
           ];
           action = (await ctx.ui.select("Jevons", choices))?.split(" — ")[0];
         }
@@ -339,10 +343,13 @@ export default function extension(pi: ExtensionAPI): void {
           return;
         }
         if (action === "settings") {
-          show(
-            "Project policy: jevons.json. Changes take effect on /jevons on.",
-            runtime.policy,
-          );
+          if (editingSettings) return;
+          editingSettings = true;
+          try {
+            await openSettings(ctx, runtime);
+          } finally {
+            editingSettings = false;
+          }
           return;
         }
         if (action === "usage") {

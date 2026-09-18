@@ -15,9 +15,14 @@ type RpcEvent = {
   method?: string;
   statusKey?: string;
   statusText?: string;
+  prefill?: string;
   data?: {
     commands?: { name: string; source: string }[];
-    entries?: { type: string; customType?: string }[];
+    entries?: {
+      type: string;
+      customType?: string;
+      data?: { policy?: { autopilot: { skills: boolean } } };
+    }[];
     assistantMessages?: number;
     toolCalls?: number;
   };
@@ -86,6 +91,7 @@ test(
       },
     );
     const events: RpcEvent[] = [];
+    let cancelEditor = false;
     let buffer = "",
       stderr = "",
       failure = "",
@@ -112,7 +118,24 @@ test(
         buffer = buffer.slice(newline + 1);
         if (!line) continue;
         try {
-          events.push(JSON.parse(line) as RpcEvent);
+          const event = JSON.parse(line) as RpcEvent;
+          events.push(event);
+          if (
+            event.type === "extension_ui_request" &&
+            event.method === "editor"
+          ) {
+            const policy = JSON.parse(event.prefill!);
+            policy.autopilot.skills = false;
+            child.stdin.write(
+              JSON.stringify({
+                type: "extension_ui_response",
+                id: event.id,
+                ...(cancelEditor
+                  ? { cancelled: true }
+                  : { value: JSON.stringify(policy) }),
+              }) + "\n",
+            );
+          }
         } catch {
           failure = "Invalid Pi RPC JSONL";
         }
@@ -160,6 +183,29 @@ test(
         !entries.data?.entries?.some(
           (entry) => entry.customType === "jevons.receipt",
         ),
+      );
+      assert.equal(
+        entries.data?.entries?.filter(
+          (entry) => entry.customType === "jevons.settings",
+        ).length,
+        1,
+      );
+      assert.equal(
+        entries.data?.entries?.find(
+          (entry) => entry.customType === "jevons.settings",
+        )?.data?.policy?.autopilot.skills,
+        false,
+      );
+      cancelEditor = true;
+      await command({ type: "prompt", message: "/jevons settings" });
+      const editor = events.findLast((event) => event.method === "editor");
+      assert.equal(JSON.parse(editor!.prefill!).autopilot.skills, false);
+      const cancelled = await command({ type: "get_entries" });
+      assert.equal(
+        cancelled.data?.entries?.filter(
+          (entry) => entry.customType === "jevons.settings",
+        ).length,
+        1,
       );
       const stats = await command({ type: "get_session_stats" });
       assert.equal(stats.data?.assistantMessages, 0);

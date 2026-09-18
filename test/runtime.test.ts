@@ -45,6 +45,7 @@ async function fixture(t: TestContext, fetch: typeof globalThis.fetch) {
     isProjectTrusted: () => true,
     sessionManager: {
       getSessionId: () => "runtime-session",
+      getBranch: () => [],
       getEntries: () =>
         receipts.map((data) => ({
           type: "custom",

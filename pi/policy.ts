@@ -58,7 +58,7 @@ const model = Type.Object(
 );
 const schema = Type.Object(
   {
-    model: text,
+    model: Type.String({ pattern: "^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$" }),
     autopilot: Type.Object(
       {
         skills: Type.Boolean(),
@@ -152,6 +152,12 @@ export async function loadPolicy(root: string): Promise<Policy> {
       return structuredClone(defaultPolicy);
     throw error;
   }
+  return parsePolicy(input);
+}
+
+export function parsePolicy(input: unknown): Policy {
+  if (Buffer.byteLength(JSON.stringify(input) ?? "") > 32000)
+    throw new Error("Jevons settings exceed 32 KiB.");
   if (!input || typeof input !== "object" || Array.isArray(input))
     throw new Error("Invalid jevons.json.");
   if (Object.hasOwn(input, "budget"))
@@ -159,6 +165,18 @@ export async function loadPolicy(root: string): Promise<Policy> {
       "Token budgets were removed. Remove budget from jevons.json; /jevons usage shows reported tokens without spending limits.",
     );
   const raw = input as Partial<Policy>;
+  for (const key of [
+    "autopilot",
+    "review",
+    "recovery",
+    "verification",
+  ] as const) {
+    if (
+      Object.hasOwn(raw, key) &&
+      (!raw[key] || typeof raw[key] !== "object" || Array.isArray(raw[key]))
+    )
+      throw new Error(`Jevons ${key} settings must be an object.`);
+  }
   const policy = {
     ...defaultPolicy,
     ...raw,
@@ -177,5 +195,7 @@ export async function loadPolicy(root: string): Promise<Policy> {
       policy.review.rules.length
   )
     throw new Error("Review thresholds or rule IDs are invalid.");
-  return policy as Policy;
+  if (Buffer.byteLength(JSON.stringify(policy)) > 32000)
+    throw new Error("Expanded Jevons settings exceed 32 KiB.");
+  return structuredClone(policy) as Policy;
 }

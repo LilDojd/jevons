@@ -6,7 +6,7 @@ import type { Evaluate, Evaluation, Policy } from "../src/contracts.ts";
 import { summarizeUsage } from "../src/usage.ts";
 import type { UsageSummary } from "../src/usage.ts";
 import { Jev } from "./service.ts";
-import { loadPolicy } from "./policy.ts";
+import { loadPolicy, parsePolicy } from "./policy.ts";
 
 export class Runtime {
   readonly pi: ExtensionAPI;
@@ -52,12 +52,50 @@ export class Runtime {
     }
   }
 
+  async readPolicy(ctx: ExtensionContext): Promise<Policy> {
+    if (!ctx.isProjectTrusted())
+      throw new Error("Trust the project before editing Jevons settings.");
+    const entry = ctx.sessionManager
+      .getBranch()
+      .findLast(
+        (entry) =>
+          entry.type === "custom" && entry.customType === "jevons.settings",
+      );
+    if (entry?.type === "custom") {
+      const data = entry.data as
+        { version?: unknown; cwd?: unknown; policy?: unknown } | undefined;
+      if (data?.cwd === ctx.cwd) {
+        if (data.version !== 1)
+          throw new Error("Unsupported Jevons session settings version.");
+        if (data.policy !== null) return parsePolicy(data.policy);
+      }
+    }
+    return loadPolicy(ctx.cwd);
+  }
+
+  updateSettings(ctx: ExtensionContext, input: unknown): void {
+    if (!ctx.isProjectTrusted())
+      throw new Error("Trust the project before editing Jevons settings.");
+    const policy = parsePolicy(input);
+    this.replacePolicy(ctx, policy, this.active, policy);
+  }
+
+  async resetSettings(ctx: ExtensionContext): Promise<void> {
+    if (!ctx.isProjectTrusted())
+      throw new Error("Trust the project before editing Jevons settings.");
+    const controller = this.controller;
+    const policy = await loadPolicy(ctx.cwd);
+    if (controller !== this.controller || !ctx.isProjectTrusted())
+      throw new Error("Settings context changed; reopen settings.");
+    this.replacePolicy(ctx, policy, this.active, null);
+  }
+
   async enable(ctx: ExtensionContext, confirmed = false): Promise<void> {
     if (!ctx.isProjectTrusted())
       throw new Error("Trust the project before enabling Jevons.");
     if (this.controller.signal.aborted) this.controller = new AbortController();
     const opening = this.controller;
-    const policy = await loadPolicy(ctx.cwd);
+    const policy = await this.readPolicy(ctx);
     opening.signal.throwIfAborted();
     if (!confirmed) {
       if (!ctx.hasUI)
@@ -83,24 +121,45 @@ export class Runtime {
         return;
     }
     opening.signal.throwIfAborted();
-    this.pause(ctx);
+    this.replacePolicy(ctx, policy, true);
+  }
+
+  private replacePolicy(
+    ctx: ExtensionContext,
+    policy: Policy,
+    active: boolean,
+    checkpoint?: Policy | null,
+  ): void {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const jev = active
+      ? new Jev({
+          model: policy.model,
+          record: (receipt) => {
+            if (this.sessionId === sessionId)
+              this.pi.appendEntry("jevons.receipt", receipt);
+          },
+        })
+      : undefined;
+    if (checkpoint !== undefined)
+      this.pi.appendEntry("jevons.settings", {
+        version: 1,
+        cwd: ctx.cwd,
+        policy: structuredClone(checkpoint),
+      });
+    this.controller.abort();
     this.controller = new AbortController();
     this.policy = policy;
-    const sessionId = ctx.sessionManager.getSessionId();
     this.sessionId = sessionId;
-    this.jev = new Jev({
-      model: policy.model,
-      record: (receipt) => {
-        if (this.sessionId === sessionId)
-          this.pi.appendEntry("jevons.receipt", receipt);
-      },
-    });
-    this.active = true;
+    this.jev = jev;
+    this.active = active;
     this.status(ctx);
   }
 
   pause(ctx: ExtensionContext): void {
     this.active = false;
+    this.controller.abort();
+    // Distinguish navigation/reload even if the previous generation was already paused.
+    this.controller = new AbortController();
     this.controller.abort();
     this.status(ctx);
   }
