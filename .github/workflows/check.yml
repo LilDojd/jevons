@@ -1,0 +1,29 @@
+name: Check
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+        with:
+          enable_kvm: false
+      - name: Install the pinned environment
+        run: |
+          revision=$(jq -er '.nodes.nixpkgs.locked.rev' devenv.lock)
+          nix profile add "github:NixOS/nixpkgs/$revision#devenv"
+      - name: Verify
+        shell: devenv shell -- bash -e {0}
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          bun run check
