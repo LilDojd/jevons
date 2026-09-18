@@ -703,18 +703,28 @@ test("cancelling a queued reservation does not charge or block later operations"
     sessionTokens: 200,
     dayTokens: 200,
   });
+  await writeFile(join(dir, "lock"), "foreign owner");
   const first = budget.reserve();
   const controller = new AbortController();
   const second = budget.reserve(controller.signal);
   controller.abort();
-  await assert.rejects(second);
+  await assert.rejects(
+    Promise.race([
+      second,
+      new Promise((resolve) => setTimeout(() => resolve("still waiting"), 200)),
+    ]),
+  );
+  const third = budget.reserve();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(await readFile(join(dir, "lock"), "utf8"), "foreign owner");
+  await rm(join(dir, "lock"));
   await first;
+  await third;
   assert.deepEqual(await budget.usage(), {
-    session: 100,
-    day: 100,
-    pending: 1,
+    session: 200,
+    day: 200,
+    pending: 2,
   });
-  await budget.reserve();
 });
 
 test(

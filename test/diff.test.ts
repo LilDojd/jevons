@@ -306,6 +306,46 @@ test("real jj selected-path fingerprints ignore unrelated working-copy edits", a
   );
 });
 
+for (const vcs of ["jj", "git"] as const) {
+  test(`real ${vcs} scopes collection before byte limits and treats metacharacters literally`, async (t) => {
+    const root = await fs.mkdtemp(join(tmpdir(), `jevons-${vcs}-scope-`));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    const exec = promisify(execFile);
+    const run = (args: string[]) => exec(vcs, args, { cwd: root });
+    if (vcs === "jj") await run(["git", "init", "--no-colocate", "."]);
+    else {
+      await run(["init"]);
+      await run([
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "Base",
+      ]);
+    }
+    const names = ["literal[1].ts", "all() | other.ts", 'quoted"name.ts'];
+    for (const name of names)
+      await fs.writeFile(join(root, name), "selected\n");
+    await fs.writeFile(
+      join(root, "large.ts"),
+      "unrelated line\n".repeat(400000),
+    );
+    if (vcs === "jj")
+      await run(["--config", "snapshot.max-new-file-size=8000000", "status"]);
+    else await run(["add", "."]);
+    for (const name of names) {
+      const snapshot = await collectLocalDiff(root, [name]);
+      assert.deepEqual(snapshot.files, [name]);
+      assert.deepEqual(snapshot.omitted, []);
+      assert.ok(snapshot.chunks.length > 0);
+    }
+    await assert.rejects(collectLocalDiff(root, []), /bound|failed/);
+  });
+}
+
 test("remote collection requests only a pinned comparison diff and invalidates moved revisions", async (t) => {
   const base = "a".repeat(40),
     head = "b".repeat(40);

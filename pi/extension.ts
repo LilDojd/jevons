@@ -23,6 +23,17 @@ export default function extension(pi: ExtensionAPI): void {
   const runtime = new Runtime(pi);
   registerPresentation(pi);
   registerAutopilot(pi, runtime);
+  const completedWriters = new Map<
+    string,
+    Omit<AuthoredQuestions, "questions">
+  >();
+  pi.on("tool_result", (event) => {
+    if (event.toolName !== "jevons_decide") return;
+    const writer = completedWriters.get(event.toolCallId);
+    completedWriters.delete(event.toolCallId);
+    if (writer && event.isError)
+      return { usage: writer.usage, details: { writer, status: "failed" } };
+  });
   pi.registerFlag("jevons", {
     type: "boolean",
     default: false,
@@ -30,6 +41,7 @@ export default function extension(pi: ExtensionAPI): void {
       "Enable Jevons sharing and configured automation for this session",
   });
   pi.on("session_start", async (event, ctx) => {
+    completedWriters.clear();
     runtime.pause(ctx);
     runtime.sessionId = ctx.sessionManager.getSessionId();
     runtime.edits.clear();
@@ -147,7 +159,7 @@ export default function extension(pi: ExtensionAPI): void {
       },
       { additionalProperties: false },
     ),
-    async execute(_id, params, signal, onUpdate, ctx) {
+    async execute(id, params, signal, onUpdate, ctx) {
       const evaluate = runtime.evaluator(ctx, "Decision");
       if (Boolean(params.questions) === Boolean(params.prompt))
         throw new Error("Supply questions or a prompt, not both.");
@@ -188,6 +200,7 @@ export default function extension(pi: ExtensionAPI): void {
           usage: authored.usage,
           elapsedMs: authored.elapsedMs,
         };
+        completedWriters.set(id, writer);
         request = parseRequest({
           state: params.state,
           questions: authored.questions,

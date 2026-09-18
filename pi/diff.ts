@@ -444,7 +444,15 @@ export async function collectLocalDiff(
     ).trim();
     patch = await command(
       "jj",
-      [...args, "diff", "--git", "--context", "3"],
+      [
+        ...args,
+        "diff",
+        "--git",
+        "--context",
+        "3",
+        "--",
+        ...scope.map((path) => `root:${JSON.stringify(path)}`),
+      ],
       directory,
       signal,
     );
@@ -479,13 +487,22 @@ export async function collectLocalDiff(
         "--dst-prefix=b/",
         "--unified=3",
         "--",
+        ...scope.map((path) => `:(top,literal)${path}`),
       ],
       directory,
       signal,
     );
     const untracked = await command(
       "git",
-      [...args, "ls-files", "--others", "--exclude-standard", "-z"],
+      [
+        ...args,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        ...scope.map((path) => `:(top,literal)${path}`),
+      ],
       directory,
       signal,
     );

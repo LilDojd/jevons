@@ -78,17 +78,30 @@ export class Budget {
     signal?.throwIfAborted();
     const previous = queues.get(this.directory);
     let release!: () => void;
-    const queued = new Promise<void>((done) => {
+    const finished = new Promise<void>((done) => {
       release = done;
     });
+    // A cancelled waiter cannot let its successors overtake the current owner.
+    const queued = Promise.all([previous, finished]).then(() => {});
     queues.set(this.directory, queued);
-    await previous;
+    void queued.then(() => {
+      if (queues.get(this.directory) === queued) queues.delete(this.directory);
+    });
+    let abort: (() => void) | undefined;
     try {
+      if (signal && previous) {
+        const cancelled = new Promise<never>((_resolve, reject) => {
+          abort = () => reject(signal.reason);
+          signal.addEventListener("abort", abort, { once: true });
+          if (signal.aborted) abort();
+        });
+        await Promise.race([previous, cancelled]);
+      } else await previous;
       signal?.throwIfAborted();
       return await this.lockedTransaction(update, signal);
     } finally {
+      if (abort) signal!.removeEventListener("abort", abort);
       release();
-      if (queues.get(this.directory) === queued) queues.delete(this.directory);
     }
   }
 

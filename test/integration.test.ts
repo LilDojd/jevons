@@ -61,6 +61,7 @@ async function fixture(t: TestContext, checks: Policy["checks"] = []) {
     Parameters<ExtensionAPI["registerCommand"]>[1]
   >();
   const sent: Parameters<ExtensionAPI["sendMessage"]>[] = [];
+  const tools = new Map<string, Parameters<ExtensionAPI["registerTool"]>[0]>();
   const pi = {
     on: (name: string, handler: Handler) =>
       handlers.set(name, [...(handlers.get(name) ?? []), handler]),
@@ -70,7 +71,8 @@ async function fixture(t: TestContext, checks: Policy["checks"] = []) {
     ) => commands.set(name, command),
     sendMessage: (...args: Parameters<ExtensionAPI["sendMessage"]>) =>
       sent.push(args),
-    registerTool() {},
+    registerTool: (tool: Parameters<ExtensionAPI["registerTool"]>[0]) =>
+      tools.set(tool.name, tool),
     registerFlag() {},
     registerEntryRenderer() {},
     registerMessageRenderer() {},
@@ -100,8 +102,88 @@ async function fixture(t: TestContext, checks: Policy["checks"] = []) {
   await emit("session_start", { reason: "startup" });
   await command("on");
   t.after(() => emit("session_shutdown", { reason: "quit" }).then(() => {}));
-  return { root, ctx, session, emit, command, requests, sent };
+  return { root, ctx, session, emit, command, requests, sent, tools };
 }
+
+test("completed writer usage survives a subsequent Jev failure as an errored native tool result", async (t) => {
+  const h = await fixture(t);
+  const usage = {
+    input: 13,
+    output: 7,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 20,
+    cost: {
+      input: 0.01,
+      output: 0.02,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0.03,
+    },
+  };
+  h.ctx.modelRegistry.getAvailable = () => [h.ctx.model!];
+  h.ctx.modelRegistry.complete = async () => ({
+    role: "assistant",
+    provider: "test",
+    model: "current",
+    responseModel: "writer-actual",
+    api: "openai-responses",
+    timestamp: 1,
+    stopReason: "toolUse",
+    usage,
+    content: [
+      {
+        type: "toolCall",
+        id: "author",
+        name: "author_questions",
+        arguments: {
+          questions: {
+            q: { type: "noul", instructions: "Is the task clear?" },
+          },
+        },
+      },
+    ],
+  });
+  t.mock.method(globalThis, "fetch", async () =>
+    Response.json({}, { status: 503 }),
+  );
+  await h.command("on");
+  await assert.rejects(
+    h.tools
+      .get("jevons_decide")!
+      .execute(
+        "decision",
+        { state: "task", prompt: "Check clarity" },
+        undefined,
+        undefined,
+        h.ctx,
+      ),
+  );
+  const patches = await h.emit("tool_result", {
+    toolName: "jevons_decide",
+    toolCallId: "decision",
+    input: {},
+    isError: true,
+    content: [{ type: "text", text: "Jev failed" }],
+  });
+  const patch = patches.find(
+    (value) => value && typeof value === "object" && "usage" in value,
+  ) as {
+    usage: unknown;
+    details: { status: string; writer: { model: string } };
+  };
+  assert.deepEqual(patch.usage, usage);
+  assert.equal(patch.details.status, "failed");
+  assert.equal(patch.details.writer.model, "writer-actual");
+  assert.ok(!("isError" in patch));
+  const repeated = await h.emit("tool_result", {
+    toolName: "jevons_decide",
+    toolCallId: "decision",
+    input: {},
+    isError: true,
+  });
+  assert.ok(repeated.every((value) => value === undefined));
+});
 
 const toolCall = {
   toolName: "bash",
