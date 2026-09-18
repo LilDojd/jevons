@@ -108,7 +108,10 @@ test("compiles all three primitives using only explicit context and the configur
   const original = structuredClone(input);
   h.ctx.scopedModels = [{ model: h.writer as never }];
   const result = await h.run(original);
-  assert.deepEqual(result, { questions, model: "writer-actual-version" });
+  assert.deepEqual(result.questions, questions);
+  assert.equal(result.model, "writer-actual-version");
+  assert.deepEqual(result.usage, response().usage);
+  assert.ok(result.elapsedMs >= 0);
   assert.deepEqual(
     parseRequest({ state: input.state, questions: result.questions }).questions,
     questions,
