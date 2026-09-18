@@ -92,8 +92,6 @@ export interface Policy {
   writer?: { provider: string; model: string };
   review: {
     automatic: boolean;
-    maxFiles: number;
-    maxBytes: number;
     concern: number;
     clear: number;
     rules: Rule[];

@@ -11,8 +11,6 @@ export const defaultPolicy: Policy = {
   profiles: [],
   review: {
     automatic: true,
-    maxFiles: 12,
-    maxBytes: 32000,
     concern: 0.8,
     clear: 0.2,
     rules: [
@@ -20,19 +18,19 @@ export const defaultPolicy: Policy = {
         id: "correctness",
         label: "Correctness",
         instructions:
-          "Does the supplied file contain a concrete logic defect visible in its implementation? Do not infer missing requirements or unseen caller behavior.",
+          "Does this change introduce a concrete logic defect visible in the supplied diff? Do not infer missing requirements or unseen caller behavior.",
       },
       {
         id: "maintainability",
         label: "Maintainability",
         instructions:
-          "Does the supplied file contain unnecessary indirection, duplicated business logic, or speculative flexibility that makes its current behavior materially harder to change?",
+          "Does this change add unnecessary indirection, duplicated business logic, or speculative flexibility that makes its current behavior materially harder to change?",
       },
     ],
   },
   checks: [],
 };
-const text = Type.String({ minLength: 1, maxLength: 4000 });
+const text = Type.String({ minLength: 1, maxLength: 4000, pattern: "\\S" });
 const positive = Type.Integer({ minimum: 1, maximum: 1000000000 });
 const model = Type.Object(
   { provider: text, model: text },
@@ -73,8 +71,6 @@ const schema = Type.Object(
     review: Type.Object(
       {
         automatic: Type.Boolean(),
-        maxFiles: Type.Integer({ minimum: 1, maximum: 40 }),
-        maxBytes: Type.Integer({ minimum: 1024, maximum: 40000 }),
         concern: Type.Number({ minimum: 0.5, maximum: 1 }),
         clear: Type.Number({ minimum: 0, maximum: 0.5 }),
         rules: Type.Array(
