@@ -1,6 +1,7 @@
 node_modules/
 .devenv/
 .direnv/
+.perch/
 .env
 .env.*
 !.env.example
