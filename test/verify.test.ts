@@ -121,6 +121,20 @@ async function fixture(t: TestContext, repository = true) {
   };
 }
 
+test("confirmation exposes argument boundaries and escapes terminal controls", async (t) => {
+  const h = await fixture(t);
+  const check = h.check("check\u001b[8m\u202e");
+  check.argv = ["program", "one argument", "two\nlines", "\u001b[8m\u202e"];
+  h.runtime.policy!.checks = [check];
+  h.confirm(async () => false);
+  assert.equal(await verifyConfigured(h.ctx, h.runtime), undefined);
+  const prompt = h.confirmations[0]!;
+  assert.ok(prompt.includes('"one argument"'));
+  assert.ok(prompt.includes('"two\\nlines"'));
+  assert.ok(!/[\u001b\u202e]/.test(prompt));
+  assert.deepEqual(await h.executed(), []);
+});
+
 for (const mode of ["denied", "no-ui", "paused"] as const) {
   test(`${mode} verification never executes configured code`, async (t) => {
     const h = await fixture(t);

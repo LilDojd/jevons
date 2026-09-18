@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Runtime } from "./runtime.ts";
 import { collectLocalDiff } from "./diff.ts";
+import { safeText } from "./presentation.ts";
 import { runChecks } from "../src/checks.ts";
 import type { CheckResult } from "../src/checks.ts";
 import { selectVerification } from "../src/verification.ts";
@@ -79,16 +80,21 @@ export async function verifyConfigured(
   if (
     !(await ctx.ui.confirm(
       "Run configured project code?",
-      [
-        ...selection.selected.map(
-          (check) =>
-            `${check.mandatory !== false ? "Mandatory" : "Optional"} · ${check.name}: ${check.argv.join(" ")}`,
-        ),
-        ...selection.selections
-          .filter((check) => !check.selected)
-          .map((check) => `Not run · ${check.name}: ${check.reason}`),
-        "Commands execute with your account permissions. Jev relevance judgments do not authorize execution.",
-      ].join("\n"),
+      safeText(
+        [
+          ...selection.selected.map(
+            (check) =>
+              `${check.mandatory !== false ? "Mandatory" : "Optional"} · ${JSON.stringify(check.name)}: ${JSON.stringify(check.argv)}`,
+          ),
+          ...selection.selections
+            .filter((check) => !check.selected)
+            .map(
+              (check) =>
+                `Not run · ${JSON.stringify(check.name)}: ${check.reason}`,
+            ),
+          "Commands execute with your account permissions. Jev relevance judgments do not authorize execution.",
+        ].join("\n"),
+      ),
       { signal },
     ))
   )
