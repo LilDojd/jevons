@@ -18,11 +18,40 @@ export class Runtime {
   active = false;
   sessionId?: string;
   task = "";
+  taskRevision = 0;
+  taskOmitted = false;
   failures = 0;
   readonly edits = new Set<string>();
 
   constructor(pi: ExtensionAPI) {
     this.pi = pi;
+  }
+
+  deliveredUser(text: string, hasImages = false): void {
+    this.taskRevision++;
+    const updated = this.task ? `${this.task}\nUser update:\n${text}` : text;
+    if (hasImages || Buffer.byteLength(updated) > 8000) this.taskOmitted = true;
+    if (!this.taskOmitted) this.task = updated;
+  }
+
+  restoreTask(ctx: ExtensionContext): void {
+    this.task = "";
+    this.taskOmitted = false;
+    this.taskRevision++;
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type !== "message" || entry.message.role !== "user") continue;
+      const content = entry.message.content;
+      this.deliveredUser(
+        typeof content === "string"
+          ? content
+          : content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n"),
+        typeof content !== "string" &&
+          content.some((part) => part.type === "image"),
+      );
+    }
   }
 
   async enable(ctx: ExtensionContext, confirmed = false): Promise<void> {
@@ -39,12 +68,13 @@ export class Runtime {
         !(await ctx.ui.confirm(
           "Enable Jevons?",
           [
-            "Shares task text, skill metadata, proposed tool arguments and selected source with TypeSafe. Explicit PR reviews fetch source from github.com using gh.",
+            "Shares task text, skill metadata, tool arguments, bounded diagnostic outcomes and selected source with TypeSafe. Explicit PR reviews fetch source from github.com using gh.",
             `Budget: ${policy.budget.sessionTokens.toLocaleString()} tokens/session; ${policy.budget.dayTokens.toLocaleString()} tokens/project UTC day.`,
             `Models: ${policy.autopilot.models}. Skills: ${policy.autopilot.skills ? "load selected" : "off"}. Automatic review: ${policy.review.automatic ? "on" : "off"}.`,
             policy.writer
               ? `Free-text questions send explicit context to ${policy.writer.provider}/${policy.writer.model} first; additional provider cost.`
               : "Free-text questions send explicit context to the current coding model first; additional provider cost.",
+            `Recovery: ${policy.recovery.mode}; at most ${policy.recovery.maxInterventions} focused replan/ask-user interventions per session, with ${policy.recovery.cooldownTurns} completed turns between them. Never authorizes commands or expands permissions. Native compaction gets a bounded evidence supplement.`,
             "Pause cancels work. Requests may incur charges; no automatic retries.",
           ].join("\n"),
           { signal: this.controller.signal },

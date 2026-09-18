@@ -49,6 +49,39 @@ async function fixture(t: TestContext, fetch: typeof globalThis.fetch) {
   return { root, runtime, ctx, receipts };
 }
 
+test("task restoration reads only delivered user entries on the current branch", () => {
+  const runtime = new Runtime({} as ExtensionAPI);
+  runtime.deliveredUser("Other branch instruction");
+  const branch = [
+    {
+      type: "message",
+      message: { role: "user", content: "Preserve credentials" },
+    },
+    { type: "compaction", summary: "Incomplete summary" },
+    {
+      type: "message",
+      message: { role: "user", content: [{ type: "text", text: "continue" }] },
+    },
+    { type: "custom_message", content: "Not user authority" },
+  ];
+  const ctx = {
+    sessionManager: { getBranch: () => branch },
+  } as unknown as ExtensionContext;
+  const previous = runtime.taskRevision;
+  runtime.restoreTask(ctx);
+  assert.ok(runtime.taskRevision > previous);
+  assert.equal(runtime.task, "Preserve credentials\nUser update:\ncontinue");
+  assert.equal(runtime.taskOmitted, false);
+  runtime.deliveredUser("x".repeat(8001));
+  assert.equal(runtime.taskOmitted, true);
+  runtime.deliveredUser("continue");
+  assert.equal(runtime.taskOmitted, true);
+  runtime.restoreTask(ctx);
+  assert.equal(runtime.taskOmitted, false);
+  runtime.deliveredUser("Image constraint", true);
+  assert.equal(runtime.taskOmitted, true);
+});
+
 function response(tokens = 20): Response {
   return Response.json({
     model: "jev-runtime-test",

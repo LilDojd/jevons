@@ -9,12 +9,28 @@ import type {
   Request,
 } from "../src/contracts.ts";
 import { reviewDiff, formatDiffReview } from "../src/diff-review.ts";
-import { defaultPolicy } from "../pi/policy.ts";
 import { parseRequest } from "../pi/schema.ts";
 import { parseDiff } from "../pi/diff.ts";
 
 function policy(overrides: Partial<Policy["review"]> = {}): Policy["review"] {
-  return { ...structuredClone(defaultPolicy.review), ...overrides };
+  return {
+    automatic: true,
+    concern: 0.8,
+    clear: 0.2,
+    rules: [
+      {
+        id: "logic",
+        label: "Logic",
+        instructions: "Does the visible change introduce a logic defect?",
+      },
+      {
+        id: "complexity",
+        label: "Complexity",
+        instructions: "Does the visible change add unnecessary complexity?",
+      },
+    ],
+    ...overrides,
+  };
 }
 
 function chunk(index: number, path = "large.ts", padding = ""): DiffChunk {

@@ -7,18 +7,12 @@ import { safeText } from "./presentation.ts";
 
 export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
   let ordinaryInput = false;
-  let initialMessage = false;
   let modelEpoch = 0;
   pi.on("session_start", () => {
     ordinaryInput = false;
-    initialMessage = false;
   });
   pi.on("message_start", (event, ctx) => {
     if (event.message.role !== "user") return;
-    if (initialMessage) {
-      initialMessage = false;
-      return;
-    }
     const content = event.message.content;
     const text =
       typeof content === "string"
@@ -27,36 +21,25 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
             .filter((part) => part.type === "text")
             .map((part) => part.text)
             .join("\n");
-    if (!text || !runtime.task) return;
-    const updated = `${runtime.task}\nUser update:\n${text}`;
-    if (Buffer.byteLength(updated) <= 8000) runtime.task = updated;
-    else {
-      runtime.task = "";
-      if (ctx.hasUI)
-        ctx.ui.notify(
-          "Task context exceeds 8,000 bytes; tool feedback is suspended until a new task.",
-          "warning",
-        );
-    }
+    runtime.deliveredUser(
+      text,
+      typeof content !== "string" &&
+        content.some((part) => part.type === "image"),
+    );
+    if (runtime.taskOmitted && ctx.hasUI)
+      ctx.ui.notify(
+        "Task evidence exceeds the text-only 8,000-byte automation bound. Automatic assessments are suspended; native agent context is unchanged.",
+        "warning",
+      );
   });
   pi.on("model_select", () => {
     modelEpoch++;
   });
-  pi.on("input", (event, ctx) => {
+  pi.on("input", (event) => {
     ordinaryInput =
       event.source !== "extension" &&
       !event.streamingBehavior &&
       !event.text.startsWith("/");
-    if (ordinaryInput) {
-      initialMessage = true;
-      runtime.task = Buffer.byteLength(event.text) <= 8000 ? event.text : "";
-      if (!runtime.task && ctx.hasUI)
-        ctx.ui.notify(
-          "Task context exceeds 8,000 bytes; autopilot is suspended until a new task.",
-          "warning",
-        );
-      runtime.failures = 0;
-    }
   });
   pi.on("before_agent_start", async (event, ctx) => {
     if (
@@ -64,13 +47,23 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
       !runtime.policy ||
       !ctx.model ||
       !ordinaryInput ||
-      !runtime.task
+      runtime.taskOmitted
     )
       return;
     ordinaryInput = false;
     const signal = runtime.controller.signal;
     const policy = runtime.policy;
     const expectedModelEpoch = modelEpoch;
+    const taskRevision = runtime.taskRevision;
+    const task = runtime.task
+      ? `${runtime.task}\nUser update:\n${event.prompt}`
+      : event.prompt;
+    if (Buffer.byteLength(task) > 8000 || event.images?.length) return;
+    const fresh = () =>
+      runtime.active &&
+      runtime.policy === policy &&
+      runtime.taskRevision === taskRevision &&
+      modelEpoch === expectedModelEpoch;
     try {
       const usage = ctx.getContextUsage()?.tokens ?? 0;
       const hasImages =
@@ -111,7 +104,7 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
           path: skill.filePath,
         }));
       const plan = await planTask(
-        runtime.task,
+        task,
         skills,
         profiles,
         { provider: ctx.model.provider, model: ctx.model.id },
@@ -120,7 +113,7 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
         signal,
       );
       signal.throwIfAborted();
-      if (!runtime.active || modelEpoch !== expectedModelEpoch) return;
+      if (!fresh()) return;
       const loaded: string[] = [];
       const notices: string[] = [];
       let skillBytes = 0;
@@ -152,7 +145,7 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
         notices.push(
           `${plan.skills.length - 3} additional skill matches not loaded`,
         );
-      if (!runtime.active || modelEpoch !== expectedModelEpoch) return;
+      if (!fresh()) return;
       if (plan.model) {
         const chosen = ctx.modelRegistry
           .getAvailable()
@@ -213,11 +206,13 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
       !runtime.active ||
       !runtime.policy?.autopilot.tools ||
       !runtime.task ||
+      runtime.taskOmitted ||
       ["read", "ls", "find", "grep"].includes(event.toolName) ||
       event.toolName.startsWith("jevons_")
     )
       return;
     const signal = runtime.controller.signal;
+    const taskRevision = runtime.taskRevision;
     try {
       const assessment = await assessTool(
         runtime.task,
@@ -227,7 +222,11 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
         ctx.signal ? AbortSignal.any([signal, ctx.signal]) : signal,
       );
       signal.throwIfAborted();
-      if (runtime.active && assessment.status === "concern") {
+      if (
+        runtime.active &&
+        runtime.taskRevision === taskRevision &&
+        assessment.status === "concern"
+      ) {
         const text = `Tool concern: ${event.toolName} · data loss ${assessment.probabilities.destructiveDataLoss.toFixed(2)} · task mismatch ${assessment.probabilities.taskMismatch.toFixed(2)} · recent failures ${runtime.failures}`;
         pi.sendMessage(
           { customType: "jevons", content: text, display: true },

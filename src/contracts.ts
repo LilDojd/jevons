@@ -88,6 +88,13 @@ export interface Policy {
     tools: boolean;
     threshold: number;
   };
+  recovery: {
+    mode: "off" | "shadow" | "steer";
+    retryConcern: number;
+    userConcern: number;
+    cooldownTurns: number;
+    maxInterventions: number;
+  };
   profiles: ModelProfile[];
   writer?: { provider: string; model: string };
   review: {

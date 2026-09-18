@@ -6,9 +6,13 @@ import type {
 import { Text } from "@earendil-works/pi-tui";
 import { Runtime } from "./runtime.ts";
 import { registerAutopilot } from "./autopilot.ts";
+import { registerRecovery } from "./recovery.ts";
+import { registerContinuity } from "./continuity.ts";
 import {
   registerPresentation,
   formatEvaluation,
+  formatDecisionDetails,
+  formatReviewDetails,
   safeText,
 } from "./presentation.ts";
 import { requestSchema, questionsSchema, parseRequest } from "./schema.ts";
@@ -17,12 +21,16 @@ import type { AuthoredQuestions } from "./author.ts";
 import { collectLocalDiff, collectPullRequestDiff } from "./diff.ts";
 import { reviewDiff, formatDiffReview } from "../src/diff-review.ts";
 import { runChecks } from "../src/checks.ts";
-import type { Evaluation, Request } from "../src/contracts.ts";
+import type { Request } from "../src/contracts.ts";
+import type { DecisionDetails } from "./presentation.ts";
+import type { DiffReport } from "../src/diff-review.ts";
 
 export default function extension(pi: ExtensionAPI): void {
   const runtime = new Runtime(pi);
   registerPresentation(pi);
+  registerContinuity(pi, runtime);
   registerAutopilot(pi, runtime);
+  registerRecovery(pi, runtime);
   const completedWriters = new Map<
     string,
     Omit<AuthoredQuestions, "questions">
@@ -45,7 +53,7 @@ export default function extension(pi: ExtensionAPI): void {
     runtime.pause(ctx);
     runtime.sessionId = ctx.sessionManager.getSessionId();
     runtime.edits.clear();
-    runtime.task = "";
+    runtime.restoreTask(ctx);
     runtime.failures = 0;
     runtime.usage = undefined;
     runtime.jev = undefined;
@@ -67,7 +75,7 @@ export default function extension(pi: ExtensionAPI): void {
   pi.on("session_tree", (_event, ctx) => {
     runtime.pause(ctx);
     runtime.edits.clear();
-    runtime.task = "";
+    runtime.restoreTask(ctx);
   });
 
   const review = async (
@@ -231,13 +239,7 @@ export default function extension(pi: ExtensionAPI): void {
       };
     },
     renderResult(result, { expanded }) {
-      const details = result.details as
-        | {
-            request: Request;
-            result: Evaluation;
-            writer?: Omit<AuthoredQuestions, "questions">;
-          }
-        | undefined;
+      const details = result.details as DecisionDetails | undefined;
       const text = details?.result
         ? formatEvaluation(details.result, details.request, details.writer)
         : result.content
@@ -245,10 +247,7 @@ export default function extension(pi: ExtensionAPI): void {
             .map((part) => part.text)
             .join("\n");
       return new Text(
-        safeText(text) +
-          (expanded
-            ? `\n${safeText(JSON.stringify(result.details, null, 2))}`
-            : ""),
+        safeText(expanded && details ? formatDecisionDetails(details) : text),
         0,
         0,
       );
@@ -290,10 +289,11 @@ export default function extension(pi: ExtensionAPI): void {
         .map((part) => part.text)
         .join("\n");
       return new Text(
-        safeText(text) +
-          (expanded
-            ? `\n${safeText(JSON.stringify(result.details, null, 2))}`
-            : ""),
+        safeText(
+          expanded && result.details
+            ? formatReviewDetails(result.details as DiffReport)
+            : text,
+        ),
         0,
         0,
       );
@@ -416,7 +416,7 @@ export default function extension(pi: ExtensionAPI): void {
             elapsedMs: authored.elapsedMs,
           };
           show(formatEvaluation(result, request, writer), {
-            questions: authored.questions,
+            request,
             writer,
             result,
           });
@@ -464,6 +464,12 @@ export default function extension(pi: ExtensionAPI): void {
             if (!runtime.active) throw new Error("Jevons is paused.");
             const checks = await runChecks(ctx.cwd, configured, lifetime);
             lifetime.throwIfAborted();
+            pi.appendEntry("jevons.checks", {
+              results: checks,
+              revision: `session-entry:${ctx.sessionManager.getLeafId() ?? "unknown"}`,
+              taskRevision: runtime.taskRevision,
+              observedAt: Date.now(),
+            });
             show(
               checks
                 .map(

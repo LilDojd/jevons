@@ -8,6 +8,13 @@ export const defaultPolicy: Policy = {
   model: "jev-1.13.0",
   budget: { sessionTokens: 1000000, dayTokens: 5000000, requestTokens: 65536 },
   autopilot: { skills: true, models: "suggest", tools: true, threshold: 0.8 },
+  recovery: {
+    mode: "steer",
+    retryConcern: 0.85,
+    userConcern: 0.9,
+    cooldownTurns: 3,
+    maxInterventions: 2,
+  },
   profiles: [],
   review: {
     automatic: true,
@@ -22,9 +29,21 @@ export const defaultPolicy: Policy = {
       },
       {
         id: "maintainability",
-        label: "Maintainability",
+        label: "Simplicity",
         instructions:
-          "Does this change add unnecessary indirection, duplicated business logic, or speculative flexibility that makes its current behavior materially harder to change?",
+          "Does this change add unnecessary abstraction, speculative configuration, duplicated logic, or a custom reinvention of a suitable standard-library operation? Flag only complexity with a concrete simpler alternative supported by this diff; necessary safety boundaries and actual compatibility requirements are not bloat.",
+      },
+      {
+        id: "tests",
+        label: "Behavioral tests",
+        instructions:
+          "Do changed tests merely mirror source text, internal call order, incidental wording, or implementation layout instead of detecting a broken observable contract? Apply Google Testing Blog guidance: test behavior, not implementation; remove change-detector tests. Interaction assertions are valid when the interaction itself is the contract (such as no network before consent). Do not demand tests for unseen behavior or flag files without test changes.",
+      },
+      {
+        id: "clarity",
+        label: "Code and prose clarity",
+        instructions:
+          "Does the change introduce materially misleading names, unsupported documentation claims, redundant commentary that restates obvious code, or verbose generic prose hiding the actual contract? Prefer self-documenting code and concise explanations of rationale and safety constraints. Flag concrete confusion, not personal style, comment counts, or presumed AI authorship.",
       },
     ],
   },
@@ -57,6 +76,20 @@ const schema = Type.Object(
         ]),
         tools: Type.Boolean(),
         threshold: Type.Number({ minimum: 0.5, maximum: 1 }),
+      },
+      { additionalProperties: false },
+    ),
+    recovery: Type.Object(
+      {
+        mode: Type.Union([
+          Type.Literal("off"),
+          Type.Literal("shadow"),
+          Type.Literal("steer"),
+        ]),
+        retryConcern: Type.Number({ minimum: 0.5, maximum: 1 }),
+        userConcern: Type.Number({ minimum: 0.5, maximum: 1 }),
+        cooldownTurns: Type.Integer({ minimum: 1, maximum: 100 }),
+        maxInterventions: Type.Integer({ minimum: 1, maximum: 5 }),
       },
       { additionalProperties: false },
     ),
@@ -124,6 +157,7 @@ export async function loadPolicy(root: string): Promise<Policy> {
     budget: { ...defaultPolicy.budget, ...raw.budget },
     autopilot: { ...defaultPolicy.autopilot, ...raw.autopilot },
     review: { ...defaultPolicy.review, ...raw.review },
+    recovery: { ...defaultPolicy.recovery, ...raw.recovery },
   };
   if (!Value.Check(schema, policy))
     throw new Error(

@@ -88,7 +88,12 @@ async function fixture(t: TestContext, checks: Policy["checks"] = []) {
     scopedModels: [],
     modelRegistry: { getAvailable: () => [] },
     getContextUsage: () => ({ tokens: 0 }),
-    sessionManager: { getSessionId: () => session.id, getBranch: () => [] },
+    sessionManager: {
+      getSessionId: () => session.id,
+      getBranch: () => [],
+      getEntries: () => [],
+      getLeafId: () => "leaf",
+    },
     ui: { confirm: async () => true, setStatus() {}, notify() {} },
   } as unknown as ExtensionCommandContext;
   extension(pi);
@@ -268,6 +273,35 @@ test("only delivered steering and follow-up constraints affect tool assessments"
   const feedback = h.sent.at(-1)!;
   assert.equal(feedback[0].display, true);
   assert.equal(feedback[1]?.deliverAs, "steer");
+});
+
+test("continue preserves delivered constraints and queued or handled input cannot overwrite them", async (t) => {
+  const h = await fixture(t);
+  const original = "Fix the parser; do not publish or delete fixtures.";
+  await h.emit("input", { source: "interactive", text: "not delivered" });
+  await h.emit("message_start", {
+    message: { role: "user", content: original },
+  });
+  await h.emit("input", { source: "interactive", text: "continue" });
+  await h.emit("tool_call", toolCall);
+  const before = (h.requests.at(-1)!.state as { task: string }).task;
+  assert.equal(before, original);
+  await h.emit("message_start", {
+    message: { role: "user", content: "continue" },
+  });
+  await h.emit("tool_call", toolCall);
+  const after = (h.requests.at(-1)!.state as { task: string }).task;
+  assert.ok(after.includes(original) && after.endsWith("continue"));
+  assert.ok(!after.includes("not delivered"));
+  const count = h.requests.length;
+  await h.emit("message_start", {
+    message: { role: "user", content: "x".repeat(8001) },
+  });
+  await h.emit("message_start", {
+    message: { role: "user", content: "continue" },
+  });
+  await h.emit("tool_call", toolCall);
+  assert.equal(h.requests.length, count);
 });
 
 for (const replacement of ["policy", "session"] as const) {
