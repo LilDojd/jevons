@@ -40,7 +40,9 @@ export function summarizeUsage(receipts: Iterable<unknown>): UsageSummary {
       input >= 0 &&
       Number.isSafeInteger(output) &&
       output >= 0 &&
-      Number.isSafeInteger(input + output)
+      Number.isSafeInteger(input + output) &&
+      Number.isSafeInteger(summary.input + input) &&
+      Number.isSafeInteger(summary.output + output)
     ) {
       summary.input += input;
       summary.output += output;

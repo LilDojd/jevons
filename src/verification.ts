@@ -162,7 +162,10 @@ export async function selectVerification(
       throw new Error("Invalid selection evaluation.");
     report.evaluations.push(evaluation);
     for (const index of assessed) {
-      const answer = evaluation.answers[`check${index}`];
+      const key = `check${index}`;
+      const answer = Object.hasOwn(evaluation.answers, key)
+        ? evaluation.answers[key]
+        : undefined;
       if (answer?.type !== "noul" || !probability(answer.noul)) {
         omit(index, "invalid-or-missing-answer");
         continue;

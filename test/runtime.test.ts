@@ -150,6 +150,33 @@ test("usage restores historical and current receipts across branches without net
   });
 });
 
+test("usage marks cumulative token overflow unknown without rounding either total", () => {
+  for (const field of ["input_tokens", "output_tokens"] as const) {
+    const other = field === "input_tokens" ? "output_tokens" : "input_tokens";
+    const entries = [
+      { [field]: Number.MAX_SAFE_INTEGER - 1, [other]: 0 },
+      { [field]: 1, [other]: 0 },
+      { [field]: 1, [other]: 7 },
+      { [field]: 0, [other]: 2 },
+    ].map((usage) => ({
+      type: "custom",
+      customType: "jevons.receipt",
+      data: { status: "completed", accounting: "reported", usage },
+    }));
+    const runtime = new Runtime({} as ExtensionAPI);
+    const ctx = {
+      sessionManager: { getEntries: () => entries },
+    } as unknown as ExtensionContext;
+    assert.deepEqual(runtime.usageSummary(ctx), {
+      input: field === "input_tokens" ? Number.MAX_SAFE_INTEGER : 2,
+      output: field === "output_tokens" ? Number.MAX_SAFE_INTEGER : 2,
+      calls: 4,
+      unknown: 1,
+      failed: 0,
+    });
+  }
+});
+
 test("network requires trusted project and explicit consent", async (t) => {
   let calls = 0;
   const { runtime, ctx } = await fixture(t, async () => {

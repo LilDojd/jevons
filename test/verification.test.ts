@@ -256,6 +256,28 @@ test("partial answers retain missing checks but expose assessment coverage", asy
   assert.equal(result.evaluations.length, 1);
 });
 
+test("inherited answers cannot exclude optional checks or count as assessment", async () => {
+  const checks = [check("inherited", false), check("assessed", false)];
+  const result = await selectVerification(
+    checks,
+    context,
+    undefined,
+    async () => ({
+      ...judgment({}),
+      answers: Object.assign(
+        Object.create({ check0: { type: "noul", noul: 0 } }),
+        { check1: { type: "noul", noul: 0 } },
+      ) as Evaluation["answers"],
+    }),
+  );
+  assert.deepEqual(result.selected, [checks[0]]);
+  assert.equal(result.selections[0]!.reason, "invalid-or-missing-answer");
+  assert.equal(result.selections[0]!.probability, undefined);
+  assert.equal(result.selections[1]!.reason, "irrelevant");
+  assert.equal(result.complete, false);
+  assert.equal(result.omitted.length, 1);
+});
+
 test("cancellation settles even when the evaluator ignores its signal", async () => {
   const checks = [check("mandatory"), check("optional", false)];
   const preCancelled = await selectVerification(
