@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runChecks } from "../src/checks.ts";
 
-test("executable failures stop gates before subsequent checks", async () => {
+const successful = {
+  name: "subsequent",
+  argv: [process.execPath, "-e", "process.exit(0)"],
+  timeoutMs: 5000,
+};
+
+test("executable failures do not skip subsequent configured checks", async () => {
   const results = await runChecks(process.cwd(), [
     {
       name: "first",
@@ -10,15 +16,80 @@ test("executable failures stop gates before subsequent checks", async () => {
       timeoutMs: 5000,
     },
     {
-      name: "unreached",
+      name: "subsequent",
       argv: [process.execPath, "-e", "process.exit(0)"],
       timeoutMs: 5000,
     },
   ]);
-  assert.equal(results.length, 1);
+  assert.equal(results.length, 2);
+  assert.equal(results[1]?.passed, true);
   assert.equal(results[0]?.passed, false);
   assert.equal(results[0]?.exitCode, 1);
   assert.equal(results[0]?.termination, "exit");
+});
+
+test("spawn failure and timeout do not prevent later checks", async () => {
+  const results = await runChecks(process.cwd(), [
+    {
+      name: "missing",
+      argv: ["/nonexistent-jevons-check-executable"],
+      timeoutMs: 5000,
+    },
+    {
+      name: "timeout",
+      argv: [process.execPath, "-e", "setInterval(()=>{},1000)"],
+      timeoutMs: 50,
+    },
+    successful,
+  ]);
+  assert.deepEqual(
+    results.map((item) => item.termination),
+    ["spawn-error", "timeout", "exit"],
+  );
+  assert.equal(results[2]!.passed, true);
+});
+
+test("cancellation preserves earlier results and accounts for unexecuted checks", async () => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 100);
+  try {
+    const results = await runChecks(
+      process.cwd(),
+      [
+        successful,
+        {
+          name: "waiting",
+          argv: [process.execPath, "-e", "setInterval(()=>{},1000)"],
+          timeoutMs: 5000,
+        },
+        successful,
+      ],
+      controller.signal,
+    );
+    assert.deepEqual(
+      results.map((item) => item.termination),
+      ["exit", "cancelled", "cancelled"],
+    );
+    assert.equal(results[0]!.passed, true);
+    assert.equal(results[2]!.elapsedMs, 0);
+    assert.equal(results[2]!.passed, false);
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+test("invalid command configuration is rejected before any execution", async () => {
+  for (const invalid of [
+    { ...successful, argv: [] },
+    { ...successful, argv: ["bad\u0000command"] },
+    { ...successful, timeoutMs: 0 },
+    { ...successful, timeoutMs: 120001 },
+  ]) {
+    await assert.rejects(
+      runChecks(process.cwd(), [invalid]),
+      /Invalid executable check/,
+    );
+  }
 });
 
 test("successful checks retain final output, exact exit codes and explicit byte omissions", async () => {
@@ -46,7 +117,7 @@ test("check deadlines, output bounds and cancellation cannot pass", async () => 
     ]);
     assert.equal(results[0]?.passed, false);
     assert.ok(results[0]!.output.length <= 8000);
-    assert.equal(results[0]!.exitCode, null);
+    if (timeoutMs === 100) assert.equal(results[0]!.exitCode, null);
     assert.equal(
       results[0]!.termination,
       timeoutMs === 100 ? "timeout" : "output-limit",

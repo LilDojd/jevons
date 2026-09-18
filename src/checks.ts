@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { Policy } from "./contracts.ts";
+import type { CheckConfig } from "./contracts.ts";
 
 export interface CheckResult {
   name: string;
@@ -14,19 +14,36 @@ export interface CheckResult {
 
 export async function runChecks(
   root: string,
-  checks: Policy["checks"],
+  checks: CheckConfig[],
   signal?: AbortSignal,
 ): Promise<CheckResult[]> {
-  const results: CheckResult[] = [];
-  for (const check of checks) {
-    signal?.throwIfAborted();
+  signal?.throwIfAborted();
+  const configured = structuredClone(checks);
+  for (const check of configured) {
     if (
       !check.argv.length ||
+      check.argv.some((arg) => typeof arg !== "string" || arg.includes("\0")) ||
+      !check.argv[0] ||
       !Number.isSafeInteger(check.timeoutMs) ||
       check.timeoutMs < 1 ||
       check.timeoutMs > 120000
     )
       throw new Error("Invalid executable check.");
+  }
+  const results: CheckResult[] = [];
+  for (const check of configured) {
+    if (signal?.aborted) {
+      results.push({
+        name: check.name,
+        passed: false,
+        output: "",
+        elapsedMs: 0,
+        exitCode: null,
+        termination: "cancelled",
+        omittedBytes: 0,
+      });
+      continue;
+    }
     const started = Date.now();
     const result = await new Promise<CheckResult>((resolve) => {
       const child = spawn(check.argv[0]!, check.argv.slice(1), {
@@ -36,16 +53,19 @@ export async function runChecks(
       });
       let tail = Buffer.alloc(0);
       let bytes = 0,
-        stopped = false,
         finished = false;
+      let stopped: CheckResult["termination"] | undefined;
       const stop = (reason: CheckResult["termination"] = "cancelled") => {
-        stopped = true;
+        if (finished || stopped) return;
+        stopped = reason;
         try {
           if (process.platform !== "win32" && child.pid)
             process.kill(-child.pid, "SIGKILL");
           else child.kill("SIGKILL");
         } catch {}
-        finish(null, reason);
+        // Close inherited pipes too; descendants must not hold the result open.
+        child.stdout.destroy();
+        child.stderr.destroy();
       };
       const abort = () => stop("cancelled");
       const finish = (
@@ -81,10 +101,9 @@ export async function runChecks(
           if (bytes > 64000) stop("output-limit");
         });
       child.once("error", () => finish(null, "spawn-error"));
-      child.once("close", (code) => finish(code));
+      child.once("close", (code) => finish(code, stopped ?? "exit"));
     });
     results.push(result);
-    if (!result.passed) break;
   }
   return results;
 }
