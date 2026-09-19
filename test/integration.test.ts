@@ -185,6 +185,30 @@ test("loading the extension enables trusted-session decisions without creating p
   assert.equal(h.requests.length, 1);
 });
 
+test("refusing resume confirmation keeps Jevons paused and prevents manual judgments", async (t) => {
+  const h = await fixture(t);
+  await h.command("pause");
+  const confirm = t.mock.method(h.ctx.ui, "confirm", async () => false);
+  await h.command("on");
+  assert.equal(confirm.mock.callCount(), 1);
+  await assert.rejects(
+    h.tools.get("jevons_decide")!.execute(
+      "declined",
+      {
+        state: "task",
+        questions: {
+          q: { type: "noul", instructions: "Is the task supplied?" },
+        },
+      },
+      undefined,
+      undefined,
+      h.ctx,
+    ),
+    /paused/,
+  );
+  assert.equal(h.requests.length, 0);
+});
+
 test("completed writer usage survives a subsequent Jev failure as an errored native tool result", async (t) => {
   const h = await fixture(t);
   const usage = {

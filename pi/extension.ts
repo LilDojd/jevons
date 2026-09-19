@@ -105,7 +105,7 @@ export default function extension(pi: ExtensionAPI): void {
       report.complete = false;
       report.status = "review";
       report.omitted.push(
-        "Diff changed or could not be rechecked; review the current changes.",
+        "The diff changed or could not be rechecked. Review the current changes.",
       );
     }
     combined.throwIfAborted();
@@ -331,9 +331,9 @@ export default function extension(pi: ExtensionAPI): void {
               ? "pause — Stop sharing and automation"
               : "on — Enable sharing and automation",
             "ask — Ask a focused question with explicit context",
-            "review — Review changed code; never approves merging",
-            "gate — Select checks, confirm execution, then review",
-            "usage — Session token totals; no spending caps",
+            "review — Review changed code. This never approves merging.",
+            "gate — Select checks. Confirm execution before review.",
+            "usage — Session token totals. No spending caps.",
             "activity — Recent requests, models and token usage",
             "settings — Edit session settings now",
           ];
@@ -367,7 +367,7 @@ export default function extension(pi: ExtensionAPI): void {
               `Jev usage · ${usage.calls} requests · ${(BigInt(usage.input) + BigInt(usage.output)).toLocaleString()} reported tokens`,
               `${usage.input.toLocaleString()} input · ${usage.output.toLocaleString()} output · ${usage.failed} failed/cancelled · ${usage.unknown} unknown usage`,
               "All branches of this Pi session. Unknown usage is not zero. No spending caps or project ledger.",
-              "Question-writer usage is separate and appears in decision details; coding-model usage stays in Pi.",
+              "Question-writer usage is separate. It appears in decision details. Coding-model usage stays in Pi.",
             ].join("\n"),
           );
           return;
@@ -387,7 +387,7 @@ export default function extension(pi: ExtensionAPI): void {
           const pages = Math.max(1, Math.ceil(receipts.length / 20));
           if (page > pages)
             throw new Error(
-              `Only ${pages} activity pages; use /jevons activity 1 for the latest.`,
+              `Only ${pages} activity pages. Use /jevons activity 1 for the latest.`,
             );
           show(
             `${receipts.length} session receipts · newest first · page ${page}/${pages}. Expand for details.${page < pages ? ` /jevons activity ${page + 1} for older requests.` : ""}`,
@@ -447,13 +447,13 @@ export default function extension(pi: ExtensionAPI): void {
           if (args[0]?.startsWith("https://")) {
             if (action === "gate" || args.length !== 1)
               throw new Error(
-                "Use /jevons review GITHUB_PR_URL; remote code is never executed.",
+                "Use /jevons review GITHUB_PR_URL. Remote code is never executed.",
               );
             if (
               !ctx.hasUI ||
               !(await ctx.ui.confirm(
                 "Review GitHub pull request?",
-                "Fetch a pinned diff through gh and send changed chunks to TypeSafe. No checkout, code execution or posted comments.",
+                "Jevons fetches a pinned diff through gh. It sends changed chunks to TypeSafe. No checkout, code execution or posted comments.",
                 { signal: lifetime },
               ))
             )

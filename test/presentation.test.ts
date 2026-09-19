@@ -156,13 +156,13 @@ test("native failed-result details retain completed writer usage without manufac
     "46 total",
     "567ms",
     "no completed evaluation",
-    "no judgment available",
+    "No judgment available",
     "State: not retained",
     "No questions or answers retained",
   ]);
   assert.ok(!text.includes("P(true)"));
   assert.ok(!text.includes("completed\n"));
-  contains(formatDecisionDetails(), ["unavailable", "no judgment available"]);
+  contains(formatDecisionDetails(), ["unavailable", "No judgment available"]);
 });
 
 test("long instructions remain complete and bounded state visibly reports omissions", () => {
@@ -342,7 +342,7 @@ test("review details expose coverage, pinned comparison, exact ranges, criteria 
     omitted: Array.from({ length: 12 }, (_, index) => `omission-${index}`),
   });
   contains(all, ["finding-21", "omission-11"]);
-  contains(formatReviewDetails(), ["unavailable", "no coverage established"]);
+  contains(formatReviewDetails(), ["unavailable", "No coverage established"]);
   contains(
     formatReviewDetails({
       ...report,
@@ -387,6 +387,10 @@ test("recovery details distinguish shadow actions and incomplete evidence with s
     "Agreement: false",
     "Batch failures: 1",
     "Unmatched results: 0",
+    "Coverage is limited to the retained window",
+    "Successful output bodies are omitted as irrelevant",
+    "Jev does not assess them",
+    "Omitted bytes alone do not mean that diagnostic coverage is incomplete",
     evaluation.model,
     "0.8123456789012345",
     "Source-free",

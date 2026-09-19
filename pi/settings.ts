@@ -18,21 +18,21 @@ const fields = [
     "autopilot",
     "models",
     "Model routing",
-    "Suggest or switch among configured profiles; eligibility checks still apply.",
+    "Suggest or switch among configured profiles. Eligibility checks still apply.",
     ["off", "suggest", "switch"],
   ],
   [
     "autopilot",
     "tools",
     "Pre-tool feedback",
-    "Optional advice on proposed calls; never grants execution permission.",
+    "Give optional advice on proposed calls. This advice never grants execution permission.",
     ["off", "on"],
   ],
   [
     "recovery",
     "mode",
     "Failure recovery",
-    "Shadow records judgments; steer permits bounded replan/ask-user messages.",
+    "Mode shadow records judgments. Mode steer permits bounded replan/ask-user messages.",
     ["off", "shadow", "steer"],
   ],
   [
@@ -46,7 +46,7 @@ const fields = [
     "review",
     "investigate",
     "Review investigation",
-    "Allow one focused coding-model follow-up per unchanged snapshot; additional model cost.",
+    "Allow one focused coding-model follow-up per unchanged snapshot. This has an additional model cost.",
     ["off", "on"],
   ],
   [
@@ -109,7 +109,7 @@ const fields = [
     "recovery",
     "maxInterventions",
     "Recovery session cap",
-    "Changing this does not reset already consumed interventions.",
+    "Changes do not reset the count of interventions already used.",
     ["1", "2", "3", "4", "5"],
   ],
   [
@@ -199,7 +199,7 @@ export async function openSettings(
     runtime.policy ?? (await runtime.readPolicy(ctx)),
   );
   const apply = (next: unknown) => {
-    if (!fresh()) throw new Error("Settings context changed; reopen settings.");
+    if (!fresh()) throw new Error("Settings context changed. Reopen settings.");
     runtime.updateSettings(ctx, next);
     policy = structuredClone(runtime.policy!);
     controller = runtime.controller;
@@ -222,7 +222,7 @@ export async function openSettings(
             container.addChild(heading);
             container.addChild(
               new Text(
-                "Changes apply immediately and survive resume/reload on this branch. No project files are written. In-flight Jev work/checks are cancelled; the coding agent keeps running.",
+                "Changes apply immediately. This branch keeps them after resume or reload. No project files are written. Changes cancel active Jev work and checks. The coding agent continues.",
                 1,
                 1,
               ),
@@ -256,7 +256,7 @@ export async function openSettings(
                   currentValue: "reset",
                   values: ["reset"],
                   description:
-                    "Discard this branch override and reload jevons.json (or defaults).",
+                    "Discard this branch override. Reload jevons.json (or defaults).",
                 },
               ],
               Math.min(18, Math.max(4, tui.terminal.rows - 10)),
@@ -354,7 +354,7 @@ export async function openSettings(
       let text = JSON.stringify(policy, null, 2);
       while (fresh()) {
         const edited = await ctx.ui.editor(
-          "Jevons session settings · save applies now; cancel keeps previous settings",
+          "Jevons session settings · Save applies changes now. Cancel keeps previous settings.",
           text,
         );
         if (!fresh() || edited === undefined) break;
@@ -366,7 +366,7 @@ export async function openSettings(
           try {
             input = JSON.parse(text);
           } catch {
-            throw new Error("Invalid JSON; settings unchanged.");
+            throw new Error("Invalid JSON. Settings unchanged.");
           }
           apply(input);
           ctx.ui.notify(

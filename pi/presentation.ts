@@ -60,7 +60,7 @@ function jevDetails(result?: Evaluation): string {
         "Jev",
         `Actual model: ${label(result.model)}\nTime: ${result.elapsedMs}ms\nTokens: ${result.usage.input_tokens + result.usage.output_tokens} total · ${result.usage.input_tokens} input · ${result.usage.output_tokens} output`,
       )
-    : "Jev: no completed evaluation recorded; no judgment available.";
+    : "Jev: no completed evaluation recorded. No judgment available.";
 }
 
 function answerSummary(answer: Answer): string {
@@ -89,7 +89,7 @@ export function formatEvaluation(
         .map(([id, answer]) => `${label(id)}: ${answerSummary(answer)}`),
       ...(answers.length > 6
         ? [
-            `${answers.length - 6} more answers; expand for all questions and distributions.`,
+            `${answers.length - 6} more answers. Expand for all questions and distributions.`,
           ]
         : []),
     ].join("\n"),
@@ -228,7 +228,7 @@ const range = (start: number, count: number) =>
     : `${start} (no lines)`;
 
 export function formatReviewDetails(report?: DiffReport): string {
-  if (!report) return "Review details: unavailable; no coverage established.";
+  if (!report) return "Review details: unavailable. No coverage established.";
   return [
     section(
       "Review coverage",
@@ -252,7 +252,7 @@ export function formatReviewDetails(report?: DiffReport): string {
             `Criterion:\n${indent(finding.criterion)}`,
           ].join("\n"),
         )
-        .join("\n\n") || "None recorded; consult coverage and omissions.",
+        .join("\n\n") || "None recorded. See coverage and omissions.",
     ),
     section(
       `Omissions (${report.omitted.length})`,
@@ -289,7 +289,7 @@ export function formatReviewDetails(report?: DiffReport): string {
       ).join("\n\n") || "No completed evaluations.",
     ),
     "Request state, full question text and ranges for non-finding chunks are not retained in this report. Findings include their retained rule criteria and ranges.",
-    "Chunk-local judgments do not establish cross-hunk correctness or approve merging. Executable checks are separate.",
+    "Judgments cover individual chunks. They do not establish correctness across chunks or approve merging. Executable checks are separate.",
   ].join("\n\n");
 }
 
@@ -345,7 +345,7 @@ export function formatRecoveryDetails(details: RecoveryDetails): string {
       "Evidence coverage",
       [
         `Diagnostic coverage complete: ${details.complete ?? "unknown"}`,
-        "Coverage is limited to the retained window. Successful output bodies are omitted as irrelevant, not assessed; omitted bytes alone do not imply incomplete diagnostic coverage.",
+        "Coverage is limited to the retained window. Successful output bodies are omitted as irrelevant. Jev does not assess them. Omitted bytes alone do not mean that diagnostic coverage is incomplete.",
         `Calls: ${details.calls ?? "unknown"} · Batch calls: ${details.batchCalls ?? "unknown"} · Batch failures: ${details.batchFailures ?? "unknown"}`,
         `Omitted bytes: ${details.omittedBytes ?? "unknown"} · Dropped calls: ${details.droppedCalls ?? "unknown"} · Dropped bytes: ${details.droppedBytes ?? "unknown"} · Unmatched results: ${details.unmatchedResults ?? "unknown"}`,
       ].join("\n"),
@@ -392,12 +392,12 @@ export function formatVerificationDetails(run: VerificationRun): string {
         "No model judgment required or available.",
     ),
     section("Omissions", run.omitted.join("\n") || "None reported."),
-    "Historical execution observations, not proof of current correctness. Jev selects relevance; exit status determines check success.",
+    "These observations describe past execution. They do not prove current correctness. Jev assesses relevance. Exit status and termination determine check success.",
   ].join("\n\n");
 }
 
 const UNAVAILABLE_DETAILS =
-  "Details unavailable: malformed or unsupported record; no judgment established.";
+  "Details unavailable: malformed or unsupported record. No judgment established.";
 
 // Session metadata is not schema-validated by Pi. Keep malformed historical
 // records visible as unavailable, without falling back to a raw source dump.

@@ -86,7 +86,7 @@ export class Runtime {
     const controller = this.controller;
     const policy = await loadPolicy(ctx.cwd);
     if (controller !== this.controller || !ctx.isProjectTrusted())
-      throw new Error("Settings context changed; reopen settings.");
+      throw new Error("Settings context changed. Reopen settings.");
     this.replacePolicy(ctx, policy, this.active, null);
   }
 
@@ -106,14 +106,15 @@ export class Runtime {
         !(await ctx.ui.confirm(
           "Enable Jevons?",
           [
-            "Shares task text, skill metadata, tool arguments, bounded diagnostic outcomes and selected source with TypeSafe. Explicit PR reviews fetch source from github.com using gh.",
-            "Reported token usage is visible; no token spending limits are enforced.",
+            "Jevons shares task text, skill metadata, tool arguments, bounded diagnostic outcomes and selected source with TypeSafe. Explicit PR reviews fetch source from github.com using gh.",
+            "Reported token usage is visible. Jevons does not enforce token spending limits.",
             `Models: ${policy.autopilot.models}. Skills: ${policy.autopilot.skills ? "load selected" : "off"}. Automatic review: ${policy.review.automatic ? "on" : "off"}.`,
             policy.writer
-              ? `Free-text questions send explicit context to ${policy.writer.provider}/${policy.writer.model} first; additional provider cost.`
-              : "Free-text questions send explicit context to the current coding model first; additional provider cost.",
-            `Recovery: ${policy.recovery.mode}; at most ${policy.recovery.maxInterventions} focused replan/ask-user interventions per session, with ${policy.recovery.cooldownTurns} completed turns between them. Never authorizes commands or expands permissions. Pi handles compaction; Jevons does not replay historical source.`,
-            "Pause cancels work. Requests may incur charges; no automatic retries.",
+              ? `Free-text questions send explicit context to ${policy.writer.provider}/${policy.writer.model} first. This has an additional provider cost.`
+              : "Free-text questions send explicit context to the current coding model first. This has an additional provider cost.",
+            `Recovery: ${policy.recovery.mode}. Limit: ${policy.recovery.maxInterventions} focused replan/ask-user interventions per session. Wait: ${policy.recovery.cooldownTurns} completed turns between interventions. Recovery never authorizes commands or expands permissions.`,
+            "Pi handles compaction. Continuity notices do not replay historical source. Pi retains its own text and summaries.",
+            "Pause cancels Jevons work. Requests may incur charges. Jevons does not retry automatically.",
           ].join("\n"),
           { signal: this.controller.signal },
         ))

@@ -41,7 +41,7 @@ export async function verifyConfigured(
     signal.throwIfAborted();
     if (!current())
       throw new Error(
-        "Verification context changed; request confirmation again. No checks started.",
+        "Verification context changed. No checks started. Request confirmation again.",
       );
   };
   if (!policy.checks.length)
@@ -55,12 +55,12 @@ export async function verifyConfigured(
   } catch {
     signal.throwIfAborted();
     omitted.push(
-      "Workspace diff unavailable; all checks remain eligible and freshness cannot be established.",
+      "Workspace diff unavailable. All checks remain eligible. Jevons cannot confirm that results apply to the current workspace.",
     );
   }
   if (runtime.taskOmitted)
     omitted.push(
-      "Task evidence is incomplete; optional checks cannot be excluded.",
+      "Task evidence is incomplete. Optional checks cannot be excluded.",
     );
   const selection = await selectVerification(
     policy.checks,
@@ -106,7 +106,7 @@ export async function verifyConfigured(
       snapshot.fingerprint
   )
     throw new Error(
-      "Workspace changed during confirmation; no checks started.",
+      "Workspace changed during confirmation. No checks started.",
     );
   requireCurrent();
   const results = await runChecks(cwd, selection.selected, signal);
@@ -126,7 +126,7 @@ export async function verifyConfigured(
   signal.throwIfAborted();
   if (stale)
     omitted.push(
-      "Workspace or task changed; check results are historical, not current verification.",
+      "The workspace or task changed. Check results describe the earlier state. They do not verify the current state.",
     );
   // A failed Jev request can deactivate sharing without revoking separately confirmed execution.
   return {
