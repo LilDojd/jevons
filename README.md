@@ -42,20 +42,24 @@ The agent can also call `jevons_decide` and `jevons_review`. For filenames with 
 
 ## Settings
 
-Use `/jevons settings` to search toggles and thresholds, select a question writer or edit the full JSON. Settings changes cancel pending Jevons work and checks, not the coding agent. Paused sessions stay paused.
+Use `/jevons settings` to change toggles, thresholds, the question writer or user-preference JSON. Preferences are saved atomically to `~/.pi/agent/jevons.json` (or your `PI_CODING_AGENT_DIR`) and follow you across sessions and projects. They override project preferences; old session-branch settings no longer override them. Existing sessions pick up external changes with `/jevons on` or a reload.
 
-Jevons saves settings on the current Pi session branch. These settings persist when you resume or reload the session. They override the project file, `jevons.json`. Select **Reset to project settings** to remove this override. Without an override, `/jevons on` reloads the project file. See [defaults and validation](pi/policy.ts) for all options.
-
-Fast compaction starts at 80% reported context use. It reuses one successful assessment while the task and existing context remain unchanged; new tasks or context changes can permit another, with at least five coding-model turns between attempts. Configure it or turn it off in `/jevons settings`; native Pi summaries are unaffected.
+Commands/checks, model-routing profiles and review rules remain in project `jevons.json`; they are never copied into user preferences. Reset saves built-in preference defaults without changing project configuration. Changes cancel pending Jevons work and checks, not the coding agent. Paused sessions stay paused. See [defaults and validation](pi/policy.ts).
 
 By default, Jevons assesses eligible skills in batches. It selects all that pass the relevance threshold. It also reviews code automatically. Model routing only suggests changes. Recovery records advice without interruption. Set recovery to `steer` to permit limited replan or ask-user messages. Investigation and pre-tool advice are off. Jevons has no project checks until you add them.
+
+## Compaction
+
+Compaction is provided separately by our [pi-jev-compact fork](https://github.com/LilDojd/pi-jev-compact), based on [019ec6e2's port](https://github.com/019ec6e2/pi-jev-compact). Its native Pi compaction hook replaces the old built-in pruning implementation. Enable `dendriticSlop.extensions.pi-jev-compact.enable` to install the pinned fork. It adds trust checks, bounded requests/responses, deadlines, safe diagnostics and source-free model/usage receipts without changing the pruning algorithm. No flake patches are applied.
+
+The port follows Pi's auto-compaction and `/compact` flow, with `/jev-compact` for an explicit request. Retained history becomes text; images and thinking blocks in the compacted portion are not retained. It falls back to Pi's built-in summary when pruning fails or saves too little. Its configuration, requests and accounting are independent: `/jevons pause` and `/jevons usage` do not control or count this extension. See its README for configuration and data-sharing behavior.
 
 ## Limits and costs
 
 - Confirm checks separately. Checks are mandatory unless you set `mandatory: false`. Uncertain optional checks remain selected. Failed, stale or unrun checks cannot count as verified. Reviews do not approve merges.
 - Jevons has no spending cap or automatic billed retry. A request failure pauses data sharing. Usage includes all session branches. Unknown usage is not zero. A new session or extension reload enables data sharing again in trusted projects.
 - Jevons limits requests to 48,000 UTF-8 bytes. State plus the longest question must fit within 24,000 bytes. Reviews split patches into 8,000-byte chunks and report missing coverage. Task-based automatic assessments stop if delivered task evidence exceeds 8,000 bytes or includes images.
-- A Pi adapter uses pinned [fast-jev-compaction](pi/vendor/fast-jev-compaction/README.md) to prune older tool context. It preserves user and assistant text; session history stays intact. Native Pi summarization remains available when pruning cannot help. Old results do not verify the current revision. Run checks again when necessary. Jevons does not track changes to ignored files, external services or toolchains.
+- Old results do not verify the current revision. Run checks again when necessary. Jevons does not track changes to ignored files, external services or toolchains.
 
 ## Development
 
@@ -63,7 +67,7 @@ By default, Jevons assesses eligible skills in batches. It selects all that pass
 devenv shell -- bun run check
 ```
 
-The project pins Bun, Node 24 and dependencies. Dependabot checks Bun packages and GitHub Actions weekly.
+The project pins Bun, Node 24, Biome and dependencies. Biome formats, lints and organizes imports using `biome.json`. Dependabot checks Bun packages and GitHub Actions weekly.
 
 ## Releases
 

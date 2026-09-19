@@ -10,6 +10,7 @@
   };
 
   packages = [
+    (pkgs.callPackage ./nix/biome.nix { })
     pkgs.jujutsu
     pkgs.nixfmt
     pkgs.secretspec
