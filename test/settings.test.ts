@@ -223,6 +223,12 @@ test("native settings list applies a toggle before closing and preserves it on E
 for (const existingFile of [false, true]) {
 	test(`an open dialog rejects another session's saved preferences (${existingFile ? "existing" : "new"} file) without replacing the active generation`, async (t) => {
 		const { ctx, runtime, pi, agentDir, notifications } = await fixture(t);
+		const key = process.env.TYPESAFE_API_KEY;
+		process.env.TYPESAFE_API_KEY = "settings-test-not-a-credential";
+		t.after(() => {
+			if (key === undefined) delete process.env.TYPESAFE_API_KEY;
+			else process.env.TYPESAFE_API_KEY = key;
+		});
 		if (existingFile) runtime.updateSettings(ctx, preferencesOf(defaultPolicy));
 		t.mock.method(globalThis, "fetch", async () => {
 			throw new Error("Unexpected network");
