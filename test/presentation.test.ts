@@ -476,6 +476,7 @@ test("registered expanded renderers wrap at narrow widths and activity receipts 
   )!;
   contains(decision.render(120).join("\n"), ["Readable", "Raw probability"]);
   for (const details of [
+    { unknown: "SECRET_SOURCE" },
     [null],
     [{ purpose: "Decision", request: { state: "SECRET_SOURCE" } }],
     { selection: null, results: [] },

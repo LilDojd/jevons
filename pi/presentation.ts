@@ -396,13 +396,16 @@ export function formatVerificationDetails(run: VerificationRun): string {
   ].join("\n\n");
 }
 
+const UNAVAILABLE_DETAILS =
+  "Details unavailable: malformed or unsupported record; no judgment established.";
+
 // Session metadata is not schema-validated by Pi. Keep malformed historical
 // records visible as unavailable, without falling back to a raw source dump.
 export function formatRestoredDetails(format: () => string): string {
   try {
     return format();
   } catch {
-    return "Details unavailable: malformed or unsupported record; no judgment established.";
+    return UNAVAILABLE_DETAILS;
   }
 }
 
@@ -429,7 +432,7 @@ function messageDetails(details: unknown): string {
     )
       return formatDecisionDetails(details as DecisionDetails);
   }
-  return readableState(details);
+  return UNAVAILABLE_DETAILS;
 }
 
 export function registerPresentation(pi: ExtensionAPI): void {
