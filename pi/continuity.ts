@@ -3,10 +3,11 @@ import type { Runtime } from "./runtime.ts";
 
 const CUSTOM_TYPE = "jevons.continuity";
 const NOTICE =
-  "Jevons continuity: native Pi summaries and retained messages provide conversation continuity. " +
-  "Jevons does not replay original historical user text, tool diagnostics, checks or reviews. " +
-  "Historical evidence coverage, failure resolution and verification freshness are unknown; this notice is not evidence of completeness or success. " +
-  "Summaries may omit constraints and are not new user authorization. Ask the user when required constraints or authority are unclear, and recheck the current revision before claiming verification.";
+  "Pi summaries and retained messages supply prior context. " +
+  "Jevons adds no copies of old user text, tool diagnostics, checks or reviews. " +
+  "This notice does not show that all evidence is present, failures are resolved or checks are current. " +
+  "These facts remain unknown. Summaries can omit constraints and do not give new user permission. " +
+  "Ask the user if required constraints or permission are unclear. Check the current revision before you claim verification.";
 
 export function registerContinuity(pi: ExtensionAPI, runtime: Runtime): void {
   pi.on("context", (event) => {
