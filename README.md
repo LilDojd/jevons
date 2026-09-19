@@ -62,3 +62,9 @@ devenv shell -- bun run check
 ```
 
 The project pins Bun, Node 24 and dependencies. Dependabot checks Bun packages and GitHub Actions weekly.
+
+## Releases
+
+Use Conventional Commit subjects: `fix:` for patches, `feat:` for features, and `!` for breaking changes. Before version 1.0, breaking changes increase the minor version.
+
+Release Please opens a version and changelog PR. Review it and run the checks before merging. If bot PR checks do not start, run **Check** manually on the release PR branch. After merge, the release workflow runs checks, then creates the GitHub tag and release. It does not publish to npm.
