@@ -1,5 +1,6 @@
 flake.lock
 flake.nix
 LICENSE
+CHANGELOG.md
 .jevons/
 pi/vendor/fast-jev-compaction/
