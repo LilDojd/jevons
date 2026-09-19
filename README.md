@@ -1,5 +1,5 @@
 > [!WARNING]
-> Hi! This is a very experimental project for personal use riding on the Jev hypetrain. It is entirely LLM-generated, and there are no guarantees on its usability and/or correctness. Shout out to https://arxiv.org/abs/2503.23303 https://arxiv.org/abs/2503.23303 and checkout his preprint
+> Hi! This is a very experimental project for personal use riding on the Jev hypetrain. It is entirely LLM-generated, and there are no guarantees on its usability and/or correctness. Shoutout to Nandakishor Mukkunnoth and his [preprint](https://arxiv.org/abs/2503.23303).
 
 # Jevons
 
