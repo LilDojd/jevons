@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/LilDojd/jevons/compare/v0.3.0...v0.4.0) (2026-09-19)
+
+
+### Features
+
+* Persist user preferences and replace built-in compaction ([76aef5e](https://github.com/LilDojd/jevons/commit/76aef5ee5ea7e24141377a33addfa9bbc9c1f0a9))
+
+
+### Bug Fixes
+
+* Isolate settings dialog tests from local credentials ([68d0fe6](https://github.com/LilDojd/jevons/commit/68d0fe6209eda7dab04f72300f3d1699caff7415))
+
 ## [0.3.0](https://github.com/LilDojd/jevons/compare/v0.2.0...v0.3.0) (2026-09-19)
 
 
