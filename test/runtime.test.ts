@@ -58,6 +58,40 @@ async function fixture(t: TestContext, fetch: typeof globalThis.fetch) {
   return { root, runtime, ctx, receipts };
 }
 
+test("compaction batches retain accounting without progress chatter, and failures still show pause", async (t) => {
+  let fail = false;
+  const { runtime, ctx, receipts } = await fixture(t, async () =>
+    fail
+      ? new Response("unavailable", { status: 503 })
+      : Response.json({
+          model: "jev-test-version",
+          answers: { relevant: { type: "noul", noul: 0.9 } },
+          usage: { input_tokens: 10, output_tokens: 2 },
+        }),
+  );
+  const statuses: { active: boolean; activity?: string }[] = [];
+  runtime.status = (_ctx, activity) => {
+    statuses.push({ active: runtime.active, activity });
+  };
+  await runtime.enable(ctx, true);
+  statuses.length = 0;
+  for (let batch = 0; batch < 2; batch++)
+    await runtime.evaluator(ctx, "Compaction")(request);
+  assert.equal(receipts.length, 2);
+  assert.equal(statuses.length, 0);
+  assert.equal(runtime.usageSummary(ctx).input, 20);
+  await runtime.evaluator(ctx, "Review")(request);
+  assert.deepEqual(
+    statuses.map((status) => status.activity),
+    ["Review", undefined],
+  );
+  statuses.length = 0;
+  fail = true;
+  await assert.rejects(runtime.evaluator(ctx, "Compaction")(request));
+  assert.equal(receipts.length, 4);
+  assert.deepEqual(statuses, [{ active: false, activity: undefined }]);
+});
+
 test("task restoration reads only delivered user entries on the current branch", () => {
   const runtime = new Runtime({} as ExtensionAPI);
   runtime.deliveredUser("Other branch instruction");

@@ -9,6 +9,11 @@ test("policy defaults keep intervention experiments opt-in and preserve describe
   const root = await mkdtemp(join(tmpdir(), "jevons-policy-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const defaults = await loadPolicy(root);
+  assert.deepEqual(defaults.compaction, {
+    automatic: true,
+    contextPercent: 80,
+    cooldownTurns: 5,
+  });
   assert.equal(defaults.recovery.mode, "shadow");
   assert.equal(defaults.review.investigate, false);
   assert.equal(defaults.autopilot.tools, false);
@@ -23,9 +28,18 @@ test("policy defaults keep intervention experiments opt-in and preserve describe
   ];
   await writeFile(
     join(root, "jevons.json"),
-    JSON.stringify({ checks, review: { investigate: true } }),
+    JSON.stringify({
+      checks,
+      review: { investigate: true },
+      compaction: { automatic: false, contextPercent: 90 },
+    }),
   );
   const configured = await loadPolicy(root);
+  assert.deepEqual(configured.compaction, {
+    automatic: false,
+    contextPercent: 90,
+    cooldownTurns: 5,
+  });
   assert.deepEqual(configured.checks, checks);
   assert.equal(configured.review.investigate, true);
 });
@@ -34,6 +48,10 @@ test("obsolete budgets and invalid execution-selection configuration fail closed
   const root = await mkdtemp(join(tmpdir(), "jevons-policy-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const policy of [
+    { compaction: { automatic: "off" } },
+    { compaction: { contextPercent: 0 } },
+    { compaction: { contextPercent: 101 } },
+    { compaction: { cooldownTurns: -1 } },
     { budget: { sessionTokens: 10 } },
     { verification: { relevance: 2 } },
     { checks: [{ name: "test", argv: [], timeoutMs: 1000 }] },

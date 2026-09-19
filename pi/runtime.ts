@@ -113,7 +113,7 @@ export class Runtime {
               ? `Free-text questions send explicit context to ${policy.writer.provider}/${policy.writer.model} first. This has an additional provider cost.`
               : "Free-text questions send explicit context to the current coding model first. This has an additional provider cost.",
             `Recovery: ${policy.recovery.mode}. Limit: ${policy.recovery.maxInterventions} focused replan/ask-user interventions per session. Wait: ${policy.recovery.cooldownTurns} completed turns between interventions. Recovery never authorizes commands or expands permissions.`,
-            "Pi handles compaction. Continuity notices do not replay historical source. Pi retains its own text and summaries.",
+            `Fast compaction: ${policy.compaction.automatic ? `automatic at ${policy.compaction.contextPercent}% context use, with at least ${policy.compaction.cooldownTurns} coding-model turns between paid assessments` : "off"}. It shares bounded conversation text and tool arguments with Jev. Configure or disable it in /jevons settings. Native Pi summaries remain independent.`,
             "Pause cancels Jevons work. Requests may incur charges. Jevons does not retry automatically.",
           ].join("\n"),
           { signal: this.controller.signal },
@@ -198,7 +198,8 @@ export class Runtime {
       lifetime.throwIfAborted();
       if (!this.active || this.jev !== jev)
         throw new Error("Jevons is paused. Use /jevons on.");
-      this.status(ctx, purpose);
+      const showProgress = purpose !== "Compaction";
+      if (showProgress) this.status(ctx, purpose);
       let result: Evaluation;
       try {
         result = await jev.evaluate(
@@ -210,7 +211,11 @@ export class Runtime {
         if (this.controller.signal === lifetime) this.active = false;
         throw error;
       } finally {
-        if (this.controller.signal === lifetime) this.status(ctx);
+        if (
+          this.controller.signal === lifetime &&
+          (showProgress || !this.active)
+        )
+          this.status(ctx);
       }
       lifetime.throwIfAborted();
       signal?.throwIfAborted();

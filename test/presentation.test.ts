@@ -535,6 +535,53 @@ test("recovery presentation retains assessed outcomes and contains unsupported r
   }
 });
 
+test("compaction batches stay out of collapsed chat while raw receipts and one attempt summary remain available", () => {
+  type Renderer = Parameters<ExtensionAPI["registerEntryRenderer"]>[1];
+  const entries = new Map<string, Renderer>();
+  registerPresentation({
+    registerEntryRenderer: (name: string, renderer: Renderer) =>
+      entries.set(name, renderer),
+    registerMessageRenderer() {},
+  } as unknown as ExtensionAPI);
+  const theme = {
+    fg: (_color: string, text: string) => text,
+  } as Parameters<Renderer>[2];
+  const data = { ...receipt, purpose: "Compaction", source: "PRIVATE_SOURCE" };
+  const entry = { data } as Parameters<Renderer>[0];
+  assert.equal(
+    entries.get("jevons.receipt")!(
+      entry,
+      { expanded: false } as Parameters<Renderer>[1],
+      theme,
+    ),
+    undefined,
+  );
+  const expanded = entries.get("jevons.receipt")!(
+    entry,
+    { expanded: true } as Parameters<Renderer>[1],
+    theme,
+  )!;
+  assert.ok(expanded.render(200).join("\n").includes(receipt.model));
+  assert.ok(!expanded.render(200).join("\n").includes("PRIVATE_SOURCE"));
+  const summary = entries.get("jevons.compaction")!(
+    {
+      data: {
+        status: "assessed",
+        requests: 8,
+        proposedDroppedCalls: 2,
+        proposedAbridgedResults: 1,
+        source: "PRIVATE_SOURCE",
+      },
+    } as Parameters<Renderer>[0],
+    { expanded: false } as Parameters<Renderer>[1],
+    theme,
+  )!;
+  const shown = summary.render(240).join("\n");
+  assert.ok(shown.includes("8 Jev requests"));
+  assert.ok(shown.includes("proposals"));
+  assert.ok(!shown.includes("PRIVATE_SOURCE"));
+});
+
 test("registered expanded renderers wrap at narrow widths and activity receipts stay source-free", () => {
   type EntryRenderer = Parameters<ExtensionAPI["registerEntryRenderer"]>[1];
   type MessageRenderer = Parameters<ExtensionAPI["registerMessageRenderer"]>[1];

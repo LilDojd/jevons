@@ -111,11 +111,19 @@ test("live settings invalidate old evaluators without pausing the replacement or
   const history = session.getEntries();
   const next = structuredClone(runtime.policy!);
   next.review.automatic = false;
+  next.compaction.automatic = false;
+  next.compaction.contextPercent = 90;
+  next.compaction.cooldownTurns = 10;
   runtime.updateSettings(ctx, next);
   assert.equal(old.signal.aborted, true);
   assert.equal(runtime.active, true);
   assert.equal(runtime.controller.signal.aborted, false);
   assert.equal(runtime.policy!.review.automatic, false);
+  assert.deepEqual((await runtime.readPolicy(ctx)).compaction, {
+    automatic: false,
+    contextPercent: 90,
+    cooldownTurns: 10,
+  });
   await assert.rejects(
     evaluate({
       state: {},

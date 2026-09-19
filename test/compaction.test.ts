@@ -26,6 +26,7 @@ import { registerCompaction } from "../pi/compaction.ts";
 import { parseRequest } from "../pi/schema.ts";
 import { Runtime } from "../pi/runtime.ts";
 import { Jev } from "../pi/service.ts";
+import { defaultPolicy } from "../pi/policy.ts";
 
 type Message = ContextEvent["messages"][number];
 const usage = {
@@ -104,8 +105,12 @@ function fixture(evaluate?: Evaluate) {
       entries.push(data);
     },
   } as unknown as ExtensionAPI;
+  const policy = structuredClone(defaultPolicy);
+  policy.compaction.cooldownTurns = 0;
   const runtime = {
     active: true,
+    policy,
+    status: () => {},
     controller: new AbortController(),
     evaluator: () => async (request: Request, signal?: AbortSignal) => {
       requests.push(parseRequest(request));
@@ -127,6 +132,11 @@ function fixture(evaluate?: Evaluate) {
     signal: abort.signal,
     model: { api: "anthropic-messages" },
     isProjectTrusted: () => trusted,
+    getContextUsage: () => ({
+      tokens: 90_000,
+      contextWindow: 100_000,
+      percent: 90,
+    }),
     sessionManager: { getSessionId: () => session },
   } as unknown as ExtensionContext;
   registerCompaction(pi, runtime);
@@ -156,6 +166,119 @@ function fixture(evaluate?: Evaluate) {
     },
   };
 }
+
+test("automatic compaction gates new billing, reuses valid pruning without oscillation, and can be disabled independently", async () => {
+  const h = fixture();
+  const input = history(...pair("reuse"));
+  const usage = (percent: number | null) => {
+    h.ctx.getContextUsage = () => ({
+      tokens: percent === null ? null : percent * 1000,
+      contextWindow: 100_000,
+      percent,
+    });
+  };
+  usage(79);
+  assert.equal(await h.context(input), input);
+  usage(null);
+  assert.equal(await h.context(input), input);
+  assert.equal(h.requests.length, 0);
+  usage(80);
+  const pruned = await h.context(input);
+  assert.notDeepEqual(pruned, input);
+  assert.equal(h.requests.length, 1);
+  for (const percent of [20, null, 95]) {
+    usage(percent);
+    const appended = [...input, ...pair("new"), consumed()];
+    const output = await h.context(appended);
+    assert.ok(
+      !output.some(
+        (message) =>
+          message.role === "toolResult" && message.toolCallId === "reuse",
+      ),
+    );
+    assert.ok(
+      output.some(
+        (message) =>
+          message.role === "toolResult" && message.toolCallId === "new",
+      ),
+    );
+    assert.equal(h.requests.length, 1);
+  }
+  h.runtime.policy!.compaction.automatic = false;
+  assert.equal(await h.context(input), input);
+  assert.equal(h.runtime.active, true);
+  assert.equal(h.requests.length, 1);
+  h.runtime.policy!.compaction.automatic = true;
+  usage(20);
+  assert.equal(await h.context(input), input);
+});
+
+test("cached pruning rejects changed sources, duplicate IDs and new user tasks even below threshold", async () => {
+  for (const change of [
+    "source",
+    "duplicate",
+    "user",
+    "task-event",
+    "model",
+    "cwd",
+    "controller",
+    "branch",
+  ] as const) {
+    const h = fixture();
+    const input = history(...pair("old"));
+    await h.context(input);
+    h.ctx.getContextUsage = () => undefined;
+    let next = structuredClone(input);
+    if (change === "source")
+      (
+        next.find((message) => message.role === "toolResult") as Extract<
+          Message,
+          { role: "toolResult" }
+        >
+      ).content = [{ type: "text", text: "changed" }];
+    if (change === "duplicate") next.push(...pair("old"), consumed());
+    if (change === "user") next.push(userMessage("new task"));
+    if (change === "task-event")
+      await h.emit("message_start", { message: userMessage("new task") });
+    if (change === "model")
+      h.ctx.model = { api: "google-generative-ai" } as typeof h.ctx.model;
+    if (change === "cwd") h.ctx.cwd = "/other";
+    if (change === "controller") h.runtime.controller = new AbortController();
+    if (change === "branch") await h.emit("session_before_tree");
+    assert.equal(await h.context(next), next, change);
+    assert.equal(h.requests.length, 1);
+  }
+});
+
+test("a no-work context creates neither a receipt nor a reusable success plan", async () => {
+  const h = fixture();
+  const initial = [userMessage("same task")];
+  assert.equal(await h.context(initial), initial);
+  assert.equal(h.entries.length, 0);
+  const unread = [...initial, ...pair("later")];
+  assert.equal(await h.context(unread), unread);
+  assert.equal(h.entries.length, 0);
+  const consumedContext = [...unread, ...Array.from({ length: 7 }, consumed)];
+  assert.notDeepEqual(await h.context(consumedContext), consumedContext);
+  assert.equal(h.requests.length, 1);
+});
+
+test("cooldown counts model turns between new attempts but never discards reusable pruning", async () => {
+  const h = fixture();
+  h.runtime.policy!.compaction.cooldownTurns = 5;
+  const input = history(...pair("cooldown"));
+  const pruned = await h.context(input);
+  await h.emit("turn_start");
+  assert.deepEqual(await h.context(input), pruned);
+  await h.emit("message_start", { message: userMessage("new task") });
+  assert.equal(await h.context(input), input);
+  for (let i = 0; i < 3; i++) await h.emit("turn_start");
+  assert.equal(await h.context(input), input);
+  assert.equal(h.requests.length, 1);
+  await h.emit("turn_start");
+  assert.deepEqual(await h.context(input), pruned);
+  assert.equal(h.requests.length, 2);
+});
 
 test("deletes only paired calls/results, preserving original non-tool blocks and avoiding identical billing", async () => {
   const h = fixture();
@@ -418,7 +541,10 @@ test("cached patches are scoped to transport and cwd and concurrent identical re
   h.ctx.model = { api: "unsupported" } as unknown as typeof h.ctx.model;
   assert.equal(await h.context(input), input);
   assert.equal(h.requests.length, 2);
-  assert.equal(h.entries.at(-1)!.reason, "no-safe-pairs");
+  assert.equal(
+    h.entries.filter((entry) => entry.status === "assessed").length,
+    2,
+  );
 });
 
 test("cancellation reaches evaluator and returns original context without waiting for a result", async () => {
@@ -615,6 +741,9 @@ test("fresh SDK consumer filters ordinary context without replacing native compa
       (pi) => {
         runtime = new Runtime(pi);
         runtime.active = true;
+        runtime.policy = structuredClone(defaultPolicy);
+        runtime.policy.compaction.contextPercent = 1;
+        runtime.policy.compaction.cooldownTurns = 0;
         runtime.taskOmitted = true;
         runtime.jev = new Jev({
           model: "jev-fixture",
@@ -669,11 +798,11 @@ test("fresh SDK consumer filters ordinary context without replacing native compa
                 },
               ],
               usage: {
-                input: 10,
-                output: 10,
+                input: 400,
+                output: 20,
                 cacheRead: 0,
                 cacheWrite: 0,
-                totalTokens: 20,
+                totalTokens: 420,
                 cost: { ...model.cost, total: 0 },
               },
               stopReason: "stop",

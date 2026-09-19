@@ -29,6 +29,27 @@ const fields = [
     ["off", "on"],
   ],
   [
+    "compaction",
+    "automatic",
+    "Automatic fast compaction",
+    "Prune older tool history near context capacity. Off disables Jev compaction only; native Pi compaction and other Jevons features remain enabled.",
+    ["on", "off"],
+  ],
+  [
+    "compaction",
+    "contextPercent",
+    "Compaction context threshold (%)",
+    "Start new assessments at this estimated context usage. Unknown usage skips assessment; valid existing pruning is retained below this threshold.",
+    ["50", "60", "70", "75", "80", "85", "90", "95"],
+  ],
+  [
+    "compaction",
+    "cooldownTurns",
+    "Compaction cooldown (turns)",
+    "Minimum coding-model turns between paid attempts, including tool follow-ups. Existing safe pruning remains in effect.",
+    ["1", "3", "5", "10", "20"],
+  ],
+  [
     "recovery",
     "mode",
     "Failure recovery",
@@ -125,6 +146,8 @@ type Field = (typeof fields)[number];
 function valueOf(policy: Policy, field: Field): boolean | number | string {
   const [group, key] = field;
   switch (group) {
+    case "compaction":
+      return policy.compaction[key];
     case "autopilot":
       return policy.autopilot[key];
     case "recovery":

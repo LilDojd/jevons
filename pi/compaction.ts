@@ -205,14 +205,27 @@ function splitRequests(state: JevState, questions: JevQuestions): Request[] {
   return requests;
 }
 
+function signedResultsSupported(ctx: ExtensionContext): boolean {
+  return [
+    "anthropic-messages",
+    "google-generative-ai",
+    "google-vertex",
+    "openai-responses",
+    "openai-codex-responses",
+  ].includes(ctx.model?.api ?? "");
+}
+
 export function registerCompaction(pi: ExtensionAPI, runtime: Runtime): void {
   let epoch = 0;
+  let turn = 0;
+  let lastAttempt = -Infinity;
   let pending: AbortController | undefined;
   let memo:
     | {
-        key: string;
+        scope: string;
         lifetime: AbortController;
-        session: string;
+        fingerprints: string[];
+        ready: boolean;
         patches: Promise<Patch[]>;
       }
     | undefined;
@@ -221,18 +234,22 @@ export function registerCompaction(pi: ExtensionAPI, runtime: Runtime): void {
     pending?.abort();
     pending = undefined;
   };
-  pi.on("turn_start", invalidate);
   const reset = () => {
     invalidate();
     memo = undefined;
   };
+  pi.on("turn_start", () => {
+    turn++;
+    invalidate();
+    if (!memo?.ready) memo = undefined;
+  });
   pi.on("session_before_switch", reset);
   pi.on("session_before_fork", reset);
   pi.on("session_before_tree", reset);
   pi.on("session_before_compact", reset);
   pi.on("session_shutdown", reset);
   pi.on("message_start", (event) => {
-    if (event.message.role === "user") invalidate();
+    if (event.message.role === "user") reset();
   });
 
   pi.on("context", async (event, ctx) => {
@@ -242,49 +259,78 @@ export function registerCompaction(pi: ExtensionAPI, runtime: Runtime): void {
     );
     const unchanged = () =>
       messages.length === event.messages.length ? undefined : { messages };
+    const policy = runtime.policy?.compaction;
     if (
       !runtime.active ||
+      !policy?.automatic ||
       !ctx.isProjectTrusted() ||
-      runtime.controller.signal.aborted
-    )
+      runtime.controller.signal.aborted ||
+      ctx.signal?.aborted
+    ) {
+      reset();
       return unchanged();
+    }
     const lifetime = runtime.controller;
-    const session = ctx.sessionManager.getSessionId();
-    const cwd = ctx.cwd;
     const generation = epoch;
-    const model = ctx.model;
-    const modelIdentity = JSON.stringify([
-      model?.api,
-      model?.provider,
-      model?.id,
-    ]);
+    const scopeNow = () =>
+      JSON.stringify([
+        ctx.sessionManager.getSessionId(),
+        ctx.cwd,
+        ctx.model?.api,
+        ctx.model?.provider,
+        ctx.model?.id,
+        runtime.task,
+        runtime.taskRevision,
+        runtime.taskOmitted,
+        runtime.policy?.compaction,
+      ]);
+    const scope = scopeNow();
     const current = () =>
       runtime.active &&
+      runtime.policy?.compaction.automatic &&
       ctx.isProjectTrusted() &&
       runtime.controller === lifetime &&
-      ctx.model === model &&
-      JSON.stringify([ctx.model?.api, ctx.model?.provider, ctx.model?.id]) ===
-        modelIdentity &&
-      ctx.cwd === cwd &&
       !lifetime.signal.aborted &&
       !ctx.signal?.aborted &&
-      ctx.sessionManager.getSessionId() === session &&
-      epoch === generation;
+      epoch === generation &&
+      scopeNow() === scope;
     try {
-      // Bound synchronous projection/fitting too; oversize context remains native.
-      if (messages.length > 2048) return unchanged();
+      if (messages.length > 2048) {
+        reset();
+        return unchanged();
+      }
       const serialized = JSON.stringify(messages);
-      if (Buffer.byteLength(serialized) > 2_000_000) return unchanged();
-      const key = createHash("sha256")
-        .update(JSON.stringify([cwd, model?.api, model?.provider, model?.id]))
-        .update(serialized)
-        .digest("hex");
-      if (
-        memo?.key !== key ||
-        memo.lifetime !== lifetime ||
-        memo.session !== session
-      ) {
+      if (Buffer.byteLength(serialized) > 2_000_000) {
+        reset();
+        return unchanged();
+      }
+      const fingerprints = messages.map((message) =>
+        createHash("sha256").update(JSON.stringify(message)).digest("hex"),
+      );
+      const compatible =
+        memo?.scope === scope &&
+        memo.lifetime === lifetime &&
+        memo.fingerprints.length <= fingerprints.length &&
+        memo.fingerprints.every(
+          (value, index) => value === fingerprints[index],
+        ) &&
+        messages
+          .slice(memo.fingerprints.length)
+          .every(
+            (message) =>
+              message.role === "assistant" || message.role === "toolResult",
+          );
+      if (!compatible) {
         pending?.abort();
+        memo = undefined;
+        const percent = ctx.getContextUsage()?.percent;
+        if (
+          percent == null ||
+          !Number.isFinite(percent) ||
+          percent < policy.contextPercent ||
+          turn - lastAttempt < policy.cooldownTurns
+        )
+          return unchanged();
         const controller = new AbortController();
         pending = controller;
         const signal = AbortSignal.any([
@@ -293,30 +339,62 @@ export function registerCompaction(pi: ExtensionAPI, runtime: Runtime): void {
           AbortSignal.timeout(120_000),
           ...(ctx.signal ? [ctx.signal] : []),
         ]);
+        let dispatched = false;
         const work = assess(
           messages,
           ctx,
           signal,
-          () => current() && JSON.stringify(messages) === serialized,
-        ).catch(() => {
-          controller.abort();
-          if (current())
-            pi.appendEntry("jevons.compaction", {
-              status: "unchanged",
-              reason: "assessment-unavailable",
-            });
-          return [];
-        });
-        memo = { key, lifetime, session, patches: work };
+          () => !!current() && JSON.stringify(messages) === serialized,
+          () => {
+            dispatched = true;
+            lastAttempt = turn;
+          },
+        )
+          .then((patches) => {
+            if (current() && dispatched) attempt.ready = true;
+            else if (memo === attempt) memo = undefined;
+            return patches;
+          })
+          .catch(() => {
+            controller.abort();
+            if (current())
+              pi.appendEntry("jevons.compaction", {
+                status: "unchanged",
+                reason: "assessment-unavailable",
+              });
+            return [];
+          });
+        const attempt = {
+          scope,
+          lifetime,
+          fingerprints,
+          ready: false,
+          patches: work,
+        };
+        memo = attempt;
       }
-      const attempt = memo;
+      const attempt = memo!;
       const patches = await attempt.patches;
       if (!current() || JSON.stringify(messages) !== serialized)
         return unchanged();
+      // Appended calls can introduce duplicate IDs. Never replay cached deletions
+      // solely because the older prefix still matches.
+      const eligible = eligiblePairs(messages, signedResultsSupported(ctx));
+      if (
+        !patches.every(
+          (patch) =>
+            eligible.has(patch.id) &&
+            (patch.action !== "drop_call" || eligible.get(patch.id)),
+        )
+      ) {
+        reset();
+        return unchanged();
+      }
       return patches.length
         ? { messages: apply(messages, patches) }
         : unchanged();
     } catch {
+      reset();
       return unchanged();
     }
   });
@@ -326,6 +404,7 @@ export function registerCompaction(pi: ExtensionAPI, runtime: Runtime): void {
     ctx: ExtensionContext,
     signal: AbortSignal,
     current: () => boolean,
+    markAttempt: () => void,
   ): Promise<Patch[]> {
     const check = () => {
       signal.throwIfAborted();
@@ -334,26 +413,8 @@ export function registerCompaction(pi: ExtensionAPI, runtime: Runtime): void {
     check();
     // These Pi serializers send tool outputs independently of signed assistant
     // blocks. Unknown transports retain opaque-origin pairs unchanged.
-    const eligible = eligiblePairs(
-      messages,
-      [
-        "anthropic-messages",
-        "google-generative-ai",
-        "google-vertex",
-        "openai-responses",
-        "openai-codex-responses",
-      ].includes(ctx.model?.api ?? ""),
-    );
-    if (!eligible.size) {
-      if (messages.some((message) => message.role === "toolResult"))
-        pi.appendEntry("jevons.compaction", {
-          status: "unchanged",
-          reason: "no-safe-pairs",
-          transport: ctx.model?.api ?? "unknown",
-          fullEvidence: false,
-        });
-      return [];
-    }
+    const eligible = eligiblePairs(messages, signedResultsSupported(ctx));
+    if (!eligible.size) return [];
     const projection = project(messages);
     assertNoCredentials(
       JSON.stringify(projection.map(({ toolResults: _, ...shared }) => shared)),
@@ -404,6 +465,7 @@ export function registerCompaction(pi: ExtensionAPI, runtime: Runtime): void {
             const answers: JevResponse["answers"] = {};
             for (const request of splitRequests(state, batchQuestions)) {
               check();
+              if (requests === 0) markAttempt();
               requests++;
               const evaluation = await evaluate(request, signal);
               check();
@@ -503,6 +565,7 @@ export function registerCompaction(pi: ExtensionAPI, runtime: Runtime): void {
       ),
       fullEvidence: false,
     });
+    runtime.status(ctx);
     return patches;
   }
 }

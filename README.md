@@ -46,6 +46,8 @@ Use `/jevons settings` to search toggles and thresholds, select a question write
 
 Jevons saves settings on the current Pi session branch. These settings persist when you resume or reload the session. They override the project file, `jevons.json`. Select **Reset to project settings** to remove this override. Without an override, `/jevons on` reloads the project file. See [defaults and validation](pi/policy.ts) for all options.
 
+Fast compaction starts at 80% reported context use. It reuses one successful assessment while the task and existing context remain unchanged; new tasks or context changes can permit another, with at least five coding-model turns between attempts. Configure it or turn it off in `/jevons settings`; native Pi summaries are unaffected.
+
 By default, Jevons assesses eligible skills in batches. It selects all that pass the relevance threshold. It also reviews code automatically. Model routing only suggests changes. Recovery records advice without interruption. Set recovery to `steer` to permit limited replan or ask-user messages. Investigation and pre-tool advice are off. Jevons has no project checks until you add them.
 
 ## Limits and costs

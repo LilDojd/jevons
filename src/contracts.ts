@@ -95,6 +95,11 @@ export interface Policy {
     tools: boolean;
     threshold: number;
   };
+  compaction: {
+    automatic: boolean;
+    contextPercent: number;
+    cooldownTurns: number;
+  };
   recovery: {
     mode: "off" | "shadow" | "steer";
     retryConcern: number;

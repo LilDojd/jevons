@@ -525,6 +525,7 @@ export function registerPresentation(pi: ExtensionAPI): void {
     (entry, { expanded }, theme) => {
       const receipt = entry.data;
       if (!receipt) return new Text("Jevons receipt: unavailable", 0, 0);
+      if (receipt.purpose === "Compaction" && !expanded) return undefined;
       return new Text(
         formatRestoredDetails(() => {
           const tokens = receipt.usage
@@ -538,6 +539,21 @@ export function registerPresentation(pi: ExtensionAPI): void {
         0,
         0,
       );
+    },
+  );
+  pi.registerEntryRenderer<Record<string, unknown>>(
+    "jevons.compaction",
+    (entry, _options, theme) => {
+      const details = entry.data ?? {};
+      const count = (key: string) =>
+        typeof details[key] === "number" && Number.isFinite(details[key])
+          ? details[key]
+          : 0;
+      const summary =
+        details.status === "assessed"
+          ? `Fast compaction · assessed · proposals: ${count("proposedDroppedCalls")} calls removed, ${count("proposedAbridgedResults")} results abridged · ${count("requests")} Jev requests · limited evidence`
+          : "Fast compaction · unchanged · no new pruning applied";
+      return new Text(theme.fg("muted", summary), 0, 0);
     },
   );
   pi.registerEntryRenderer<RecoveryDetails>(

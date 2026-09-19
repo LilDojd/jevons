@@ -7,6 +7,7 @@ import type { Policy } from "../src/contracts.ts";
 export const defaultPolicy: Policy = {
   model: "jev-1.13.0",
   autopilot: { skills: true, models: "suggest", tools: false, threshold: 0.8 },
+  compaction: { automatic: true, contextPercent: 80, cooldownTurns: 5 },
   recovery: {
     mode: "shadow",
     retryConcern: 0.85,
@@ -69,6 +70,14 @@ const schema = Type.Object(
         ]),
         tools: Type.Boolean(),
         threshold: Type.Number({ minimum: 0.5, maximum: 1 }),
+      },
+      { additionalProperties: false },
+    ),
+    compaction: Type.Object(
+      {
+        automatic: Type.Boolean(),
+        contextPercent: Type.Integer({ minimum: 1, maximum: 100 }),
+        cooldownTurns: Type.Integer({ minimum: 1, maximum: 100 }),
       },
       { additionalProperties: false },
     ),
@@ -169,6 +178,7 @@ export function parsePolicy(input: unknown): Policy {
     "autopilot",
     "review",
     "recovery",
+    "compaction",
     "verification",
   ] as const) {
     if (
@@ -183,6 +193,7 @@ export function parsePolicy(input: unknown): Policy {
     autopilot: { ...defaultPolicy.autopilot, ...raw.autopilot },
     review: { ...defaultPolicy.review, ...raw.review },
     recovery: { ...defaultPolicy.recovery, ...raw.recovery },
+    compaction: { ...defaultPolicy.compaction, ...raw.compaction },
     verification: { ...defaultPolicy.verification, ...raw.verification },
   };
   if (!Value.Check(schema, policy))
