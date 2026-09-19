@@ -12,5 +12,6 @@
   packages = [
     pkgs.jujutsu
     pkgs.nixfmt
+    pkgs.secretspec
   ];
 }
