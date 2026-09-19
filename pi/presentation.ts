@@ -330,12 +330,89 @@ interface RecoveryDetails {
   evaluation?: Evaluation;
 }
 
+const recoveryReasons: Record<string, Record<string, string>> = {
+  observed: {
+    "no-failures": "No tool failures reported in this batch.",
+    "assistant-error":
+      "Assistant ended with an error; recovery assessment skipped.",
+    cooldown: "Recovery assessment skipped during cooldown.",
+    "session-cap":
+      "Recovery assessment skipped: session intervention limit reached.",
+    "assessment-pending":
+      "Assessment requested; see later records for the outcome.",
+  },
+  cancelled: { cancelled: "Recovery cancelled." },
+  unassessed: {
+    "incomplete-evidence":
+      "Recovery not assessed: diagnostic evidence incomplete.",
+    "unsupported-evidence":
+      "Recovery not assessed: unsupported diagnostic evidence.",
+  },
+  assessed: {},
+  unavailable: {},
+};
+
+function recoveryExplanation(details: RecoveryDetails): string | undefined {
+  if (!details || typeof details !== "object" || Array.isArray(details))
+    throw new Error("Malformed recovery record.");
+  const reasons =
+    typeof details.status === "string"
+      ? ownValue(recoveryReasons, details.status)
+      : undefined;
+  if (
+    !reasons ||
+    (details.mode !== undefined &&
+      !["steer", "shadow"].includes(details.mode)) ||
+    [details.action, details.baseline].some(
+      (value) =>
+        value !== undefined && !["none", "replan", "ask-user"].includes(value),
+    ) ||
+    [details.complete, details.agreesWithBaseline].some(
+      (value) => value !== undefined && typeof value !== "boolean",
+    ) ||
+    [
+      details.calls,
+      details.batchCalls,
+      details.batchFailures,
+      details.omittedBytes,
+      details.droppedCalls,
+      details.droppedBytes,
+      details.unmatchedResults,
+    ].some(
+      (value) =>
+        value !== undefined && (!Number.isSafeInteger(value) || value < 0),
+    )
+  )
+    throw new Error("Malformed or unsupported recovery record.");
+  if (details.reason !== undefined) {
+    const explanation =
+      typeof details.reason === "string"
+        ? ownValue(reasons, details.reason)
+        : undefined;
+    if (
+      !explanation ||
+      (details.reason === "no-failures" &&
+        details.batchFailures !== undefined &&
+        details.batchFailures !== 0)
+    )
+      throw new Error("Malformed or unsupported recovery reason.");
+    return explanation;
+  }
+  if (details.status === "observed")
+    return details.batchFailures === 0
+      ? "No tool failures reported in this batch."
+      : "Batch observed; assessment outcome not recorded here.";
+  return undefined;
+}
+
 export function formatRecoveryDetails(details: RecoveryDetails): string {
+  const explanation = recoveryExplanation(details);
   return [
     section(
       "Recovery",
       [
         `Status: ${label(details.status ?? "unknown")} · Mode: ${label(details.mode ?? "not recorded")}`,
+        ...(explanation ? [explanation] : []),
         `Action: ${label(details.action ?? "none recorded")}${details.mode === "shadow" ? " (shadow only; not sent)" : ""}`,
         `Baseline: ${label(details.baseline ?? "not recorded")} · Agreement: ${details.agreesWithBaseline ?? "not recorded"}`,
         ...(details.reason ? [`Reason: ${label(details.reason)}`] : []),
@@ -420,6 +497,13 @@ function messageDetails(details: unknown): string {
         .join("\n\n") || "No receipts on this page."
     );
   if (typeof details === "object") {
+    if (
+      "kind" in details &&
+      details.kind === "autopilot" &&
+      "coverage" in details &&
+      typeof details.coverage === "string"
+    )
+      return safeText(details.coverage);
     if ("selection" in details && "results" in details)
       return formatVerificationDetails(details as VerificationRun);
     if ("reviewedChunks" in details)
@@ -461,14 +545,14 @@ export function registerPresentation(pi: ExtensionAPI): void {
     (entry, { expanded }, theme) => {
       const details = entry.data ?? {};
       return new Text(
-        formatRestoredDetails(() =>
-          expanded
-            ? formatRecoveryDetails(details)
-            : theme.fg(
-                "muted",
-                `Recovery · ${label(details.status ?? "unknown")} · ${label(details.action ?? "no action recorded")}${details.mode === "shadow" ? " (shadow)" : ""}`,
-              ),
-        ),
+        formatRestoredDetails(() => {
+          if (expanded) return formatRecoveryDetails(details);
+          const explanation = recoveryExplanation(details);
+          return theme.fg(
+            "muted",
+            `Recovery · ${label(details.status ?? "unknown")}${details.mode ? ` · ${label(details.mode)}` : ""} · ${explanation ?? label(details.action ?? "no action recorded")}`,
+          );
+        }),
         0,
         0,
       );

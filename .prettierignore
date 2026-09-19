@@ -2,3 +2,4 @@ flake.lock
 flake.nix
 LICENSE
 .jevons/
+pi/vendor/fast-jev-compaction/

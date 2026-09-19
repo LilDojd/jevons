@@ -52,7 +52,13 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
     )
       return;
     ordinaryInput = false;
-    const signal = runtime.controller.signal;
+    const lifetime = runtime.controller.signal;
+    const turnSignal = ctx.signal;
+    const signal = AbortSignal.any([
+      lifetime,
+      AbortSignal.timeout(120_000),
+      ...(turnSignal ? [turnSignal] : []),
+    ]);
     const policy = runtime.policy;
     const expectedModelEpoch = modelEpoch;
     const taskRevision = runtime.taskRevision;
@@ -115,8 +121,11 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
       signal.throwIfAborted();
       if (!fresh()) return;
       const loaded: string[] = [];
-      const notices: string[] = [plan.coverage];
-      let skillBytes = 0;
+      const notices: string[] = [];
+      if (policy.autopilot.skills)
+        notices.push(
+          `Skills: ${plan.skills.length} selected · ${plan.assessedSkills}/${skills.length} assessed.`,
+        );
       for (const skill of plan.skills) {
         signal.throwIfAborted();
         if (!fresh()) return;
@@ -139,9 +148,7 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
             await file.close();
           }
           const bytes = Buffer.byteLength(content);
-          if (bytes > 12000 || skillBytes + bytes > 20000)
-            throw new Error("12000-byte body or 20000-byte total limit");
-          skillBytes += bytes;
+          if (bytes > 12000) throw new Error("12000-byte body limit");
           loaded.push(
             `<skill name=${JSON.stringify(skill.name)} path=${JSON.stringify(skill.path)}>\n${content}\n</skill>`,
           );
@@ -197,11 +204,11 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
             customType: "jevons",
             content: notices.map(safeText).join("\n"),
             display: true,
-            details: { coverage: plan.coverage },
+            details: { kind: "autopilot", coverage: plan.coverage },
           },
         };
     } catch (error) {
-      if (!signal.aborted && ctx.hasUI)
+      if (!lifetime.aborted && !turnSignal?.aborted && ctx.hasUI)
         ctx.ui.notify(
           safeText(
             error instanceof Error ? error.message : "Autopilot unavailable.",

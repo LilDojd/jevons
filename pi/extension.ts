@@ -8,7 +8,7 @@ import { Runtime } from "./runtime.ts";
 import { openSettings } from "./settings.ts";
 import { registerAutopilot } from "./autopilot.ts";
 import { registerRecovery } from "./recovery.ts";
-import { registerContinuity } from "./continuity.ts";
+import { registerCompaction } from "./compaction.ts";
 import { registerInvestigation } from "./investigation.ts";
 import { verifyConfigured, formatVerification } from "./verify.ts";
 import {
@@ -32,7 +32,7 @@ export default function extension(pi: ExtensionAPI): void {
   const runtime = new Runtime(pi);
   let editingSettings = false;
   registerPresentation(pi);
-  registerContinuity(pi, runtime);
+  registerCompaction(pi, runtime);
   registerAutopilot(pi, runtime);
   registerRecovery(pi, runtime);
   const investigate = registerInvestigation(pi, runtime);

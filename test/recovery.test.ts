@@ -94,7 +94,11 @@ function fixture(evaluate: Evaluate = async () => judgment()) {
     return result;
   };
   let id = 0;
-  const batch = async (error = true, text = "Unknown option --wrong") => {
+  const batch = async (
+    error = true,
+    text = "Unknown option --wrong",
+    stopReason = "toolUse",
+  ) => {
     await emit("turn_start");
     const call = {
       toolCallId: `call-${++id}`,
@@ -110,7 +114,7 @@ function fixture(evaluate: Evaluate = async () => judgment()) {
     await emit("tool_result", result);
     await emit("turn_end", {
       toolResults: [result],
-      message: { role: "assistant", stopReason: "toolUse" },
+      message: { role: "assistant", stopReason },
     });
   };
   return { emit, runtime, ctx, session, abort, entries, sent, requests, batch };
@@ -208,6 +212,43 @@ test("no requests before consent or in off mode; final success supersedes provis
   });
   assert.equal(h.requests.length, 0);
   assert.equal(h.entries.at(-1)!.data.batchFailures, 0);
+});
+
+test("recovery observations distinguish skipped checks from assessment starts", async () => {
+  for (const mode of ["steer", "shadow"] as const) {
+    const h = fixture();
+    h.runtime.policy!.recovery.mode = mode;
+    await h.batch(false);
+    assert.equal(h.entries.at(-1)!.data.reason, "no-failures");
+    assert.equal(h.entries.at(-1)!.data.mode, mode);
+    assert.equal(h.requests.length, 0);
+
+    await h.batch(true, "Failure", "error");
+    assert.equal(h.entries.at(-1)!.data.reason, "assistant-error");
+    await h.batch(true, "Failure", "aborted");
+    assert.equal(h.entries.at(-1)!.data.status, "cancelled");
+    assert.equal(h.entries.at(-1)!.data.reason, "cancelled");
+    assert.equal(h.requests.length, 0);
+
+    const start = h.entries.length;
+    await h.batch();
+    assert.equal(h.entries[start]!.data.reason, "assessment-pending");
+    assert.equal(h.entries[start]!.data.action, undefined);
+    assert.equal(h.entries[start + 1]!.data.status, "assessed");
+    assert.equal(h.requests.length, 1);
+
+    await h.batch();
+    assert.equal(h.entries.at(-1)!.data.reason, "cooldown");
+    assert.equal(h.requests.length, 1);
+    for (let i = 0; i < h.runtime.policy!.recovery.cooldownTurns; i++)
+      await h.batch();
+    assert.equal(h.requests.length, 2);
+    await h.batch();
+    assert.equal(h.entries.at(-1)!.data.reason, "session-cap");
+    assert.equal(h.entries.at(-1)!.data.mode, mode);
+    assert.equal(h.requests.length, 2);
+    assert.equal(h.sent.length, mode === "steer" ? 2 : 0);
+  }
 });
 
 test("final batch can steer once; no tool blocking, execution, or generated action text", async () => {

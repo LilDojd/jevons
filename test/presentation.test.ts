@@ -415,6 +415,126 @@ test("recovery details distinguish shadow actions and incomplete evidence with s
   );
 });
 
+function renderRecovery(data: unknown, expanded: boolean): string {
+  type EntryRenderer = Parameters<ExtensionAPI["registerEntryRenderer"]>[1];
+  let recovery: EntryRenderer | undefined;
+  registerPresentation({
+    registerEntryRenderer: (name: string, renderer: EntryRenderer) => {
+      if (name === "jevons.recovery") recovery = renderer;
+    },
+    registerMessageRenderer: () => {},
+  } as unknown as ExtensionAPI);
+  assert.ok(recovery);
+  return recovery(
+    { data } as Parameters<EntryRenderer>[0],
+    { expanded } as Parameters<EntryRenderer>[1],
+    {
+      fg: (_color: string, text: string) => text,
+    } as Parameters<EntryRenderer>[2],
+  )!
+    .render(1000)
+    .join("\n");
+}
+
+test("recovery observations explain the recorded gate and mode without implying a live assessment", () => {
+  const cases = [
+    ["no-failures", /no tool failures reported in this batch/i],
+    ["assistant-error", /assistant ended with an error.*assessment skipped/i],
+    ["cooldown", /assessment skipped.*cooldown/i],
+    ["session-cap", /assessment skipped.*session intervention limit/i],
+    ["assessment-pending", /assessment requested.*later records.*outcome/i],
+    ["cancelled", /recovery cancelled/i],
+  ] as const;
+  for (const [reason, expected] of cases) {
+    for (const mode of ["steer", "shadow"] as const) {
+      for (const expanded of [false, true]) {
+        const text = renderRecovery(
+          {
+            status: reason === "cancelled" ? "cancelled" : "observed",
+            reason,
+            mode,
+            batchFailures: reason === "assessment-pending" ? 1 : 0,
+            task: "SECRET_SOURCE",
+          },
+          expanded,
+        );
+        assert.match(text, expected);
+        assert.ok(text.includes(mode));
+        assert.doesNotMatch(
+          text,
+          /still running|in progress|assessment completed|globally healthy|SECRET_SOURCE/i,
+        );
+        if (reason !== "no-failures")
+          assert.doesNotMatch(text, /no tool failures reported/i);
+        if (expanded) assert.ok(text.includes(`Reason: ${reason}`));
+      }
+    }
+  }
+});
+
+test("legacy recovery observations infer only batch-local absence of reported failures", () => {
+  for (const batchFailures of [0, 1, undefined]) {
+    for (const expanded of [false, true]) {
+      const text = renderRecovery(
+        { status: "observed", batchFailures },
+        expanded,
+      );
+      assert.doesNotMatch(
+        text,
+        /\bsteer\b|\bshadow\b|assessment requested|in progress|assessment completed|healthy/i,
+      );
+      if (batchFailures === 0)
+        assert.match(text, /no tool failures reported in this batch/i);
+      else {
+        assert.match(text, /assessment outcome not recorded here/i);
+        assert.doesNotMatch(text, /no tool failures reported/i);
+      }
+      if (expanded) assert.match(text, /Mode: not recorded/);
+    }
+  }
+});
+
+test("recovery presentation retains assessed outcomes and contains unsupported restored records", () => {
+  for (const mode of ["steer", "shadow"]) {
+    for (const action of ["none", "replan", "ask-user"]) {
+      const data = { status: "assessed", mode, action, evaluation };
+      const compact = renderRecovery(data, false);
+      assert.ok(compact.includes(action));
+      assert.ok(compact.includes(mode));
+      const expanded = renderRecovery(data, true);
+      contains(expanded, [
+        evaluation.model,
+        "0.8123456789012345",
+        `Action: ${action}`,
+      ]);
+      if (mode === "shadow") assert.match(expanded, /shadow only; not sent/);
+    }
+  }
+  for (const data of [
+    null,
+    [],
+    "SECRET_SOURCE",
+    {},
+    { status: "SECRET_SOURCE" },
+    { status: "constructor" },
+    { status: "observed", reason: "constructor" },
+    { status: "observed", reason: "SECRET_SOURCE" },
+    { status: "observed", reason: { task: "SECRET_SOURCE" } },
+    { status: "observed", mode: "SECRET_SOURCE" },
+    { status: "observed", batchFailures: "SECRET_SOURCE" },
+    { status: "observed", batchFailures: -1 },
+    { status: "observed", reason: "no-failures", batchFailures: 1 },
+    { status: "assessed", action: { task: "SECRET_SOURCE" } },
+    { status: "assessed", complete: "SECRET_SOURCE" },
+  ]) {
+    for (const expanded of [false, true]) {
+      const text = renderRecovery(data, expanded);
+      assert.match(text, /unavailable.*malformed or unsupported/i);
+      assert.doesNotMatch(text, /SECRET_SOURCE/);
+    }
+  }
+});
+
 test("registered expanded renderers wrap at narrow widths and activity receipts stay source-free", () => {
   type EntryRenderer = Parameters<ExtensionAPI["registerEntryRenderer"]>[1];
   type MessageRenderer = Parameters<ExtensionAPI["registerMessageRenderer"]>[1];
@@ -479,7 +599,32 @@ test("registered expanded renderers wrap at narrow widths and activity receipts 
     theme,
   )!;
   contains(decision.render(120).join("\n"), ["Readable", "Raw probability"]);
+  const autopilot = {
+    content: "Skills: 0 selected · 31/44 assessed.",
+    details: {
+      kind: "autopilot",
+      coverage:
+        "13 candidates were not assessed: 2 explicit-only, 11 request limits.",
+      task: "SECRET_SOURCE",
+    },
+  } as Parameters<MessageRenderer>[0];
+  const compactPlan = messages.get("jevons")!(
+    autopilot,
+    { ...options, expanded: false },
+    theme,
+  )!;
+  const detailedPlan = messages.get("jevons")!(autopilot, options, theme)!;
+  assert.ok(!compactPlan.render(120).join("\n").includes("explicit-only"));
+  const planText = detailedPlan.render(120).join("\n");
+  contains(planText, [
+    "31/44",
+    "13 candidates",
+    "explicit-only",
+    "request limits",
+  ]);
+  assert.ok(!planText.includes("SECRET_SOURCE"));
   for (const details of [
+    { kind: "autopilot", coverage: { task: "SECRET_SOURCE" } },
     { unknown: "SECRET_SOURCE" },
     [null],
     [{ purpose: "Decision", request: { state: "SECRET_SOURCE" } }],

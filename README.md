@@ -20,7 +20,7 @@ secretspec run --provider keyring -- ./node_modules/.bin/pi --no-extensions -e "
 
 SecretSpec prompts for the key without displaying it. Never put the key in command arguments. If your runtime environment already supplies the key, use `--provider env` with `secretspec run`. Plain `devenv shell` does not load secrets.
 
-**When you load Jevons in a trusted project, you enable data sharing.** Jevons can send task text, skill descriptions, tool arguments, selected source and diagnostic excerpts to TypeSafe. Free-text questions also use a question writer. By default, this writer is your current coding model. Keep secrets out of prompts, Git and the Nix store.
+**When you load Jevons in a trusted project, you enable data sharing.** Jevons can send conversation text, skill descriptions, tool arguments, selected source and diagnostic excerpts to TypeSafe. Free-text questions also use a question writer. By default, this writer is your current coding model. Keep secrets out of prompts, Git and the Nix store.
 
 For a declarative installation, enable `dendriticSlop.extensions.jevons.enable` in [dendritic-slop](https://github.com/LilDojd/dendritic-slop). Pi lists Jevons as a package, not a file under `~/.pi/agent/extensions`. After you change the package pin, rebuild the configuration. Then restart Pi.
 
@@ -46,14 +46,14 @@ Use `/jevons settings` to search toggles and thresholds, select a question write
 
 Jevons saves settings on the current Pi session branch. These settings persist when you resume or reload the session. They override the project file, `jevons.json`. Select **Reset to project settings** to remove this override. Without an override, `/jevons on` reloads the project file. See [defaults and validation](pi/policy.ts) for all options.
 
-By default, Jevons selects skills automatically. It also reviews code automatically. Model routing only suggests changes. Recovery records advice without interruption. Set recovery to `steer` to permit limited replan or ask-user messages. Investigation and pre-tool advice are off. Jevons has no project checks until you add them.
+By default, Jevons assesses eligible skills in batches. It selects all that pass the relevance threshold. It also reviews code automatically. Model routing only suggests changes. Recovery records advice without interruption. Set recovery to `steer` to permit limited replan or ask-user messages. Investigation and pre-tool advice are off. Jevons has no project checks until you add them.
 
 ## Limits and costs
 
 - Confirm checks separately. Checks are mandatory unless you set `mandatory: false`. Uncertain optional checks remain selected. Failed, stale or unrun checks cannot count as verified. Reviews do not approve merges.
 - Jevons has no spending cap or automatic billed retry. A request failure pauses data sharing. Usage includes all session branches. Unknown usage is not zero. A new session or extension reload enables data sharing again in trusted projects.
-- Jevons limits requests to 48,000 UTF-8 bytes. State plus the longest question must fit within 24,000 bytes. Reviews split patches into 8,000-byte chunks and report missing coverage. Automatic assessments stop if delivered task evidence exceeds 8,000 bytes or includes images.
-- Pi handles compaction. Old results do not verify the current revision. Run checks again when necessary. Jevons does not track changes to ignored files, external services or toolchains.
+- Jevons limits requests to 48,000 UTF-8 bytes. State plus the longest question must fit within 24,000 bytes. Reviews split patches into 8,000-byte chunks and report missing coverage. Task-based automatic assessments stop if delivered task evidence exceeds 8,000 bytes or includes images.
+- A Pi adapter uses pinned [fast-jev-compaction](pi/vendor/fast-jev-compaction/README.md) to prune older tool context. It preserves user and assistant text; session history stays intact. Native Pi summarization remains available when pruning cannot help. Old results do not verify the current revision. Run checks again when necessary. Jevons does not track changes to ignored files, external services or toolchains.
 
 ## Development
 

@@ -122,11 +122,15 @@ export function parseRequest(value: unknown): Request {
   const serialized = JSON.stringify(value);
   if (Buffer.byteLength(serialized) > 48000)
     throw new Error("Jev request exceeds 48,000 bytes; narrow the context.");
+  assertNoCredentials(serialized);
+  return JSON.parse(serialized) as Request;
+}
+
+export function assertNoCredentials(text: string): void {
   if (
     /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|apikey_[A-Za-z0-9_-]{20,})/.test(
-      serialized,
+      text,
     )
   )
     throw new Error("Possible credential in Jev context.");
-  return JSON.parse(serialized) as Request;
 }

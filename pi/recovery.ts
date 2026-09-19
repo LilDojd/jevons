@@ -230,26 +230,29 @@ export function registerRecovery(pi: ExtensionAPI, runtime: Runtime): void {
       ctx.signal?.aborted ||
       (event.message.role === "assistant" &&
         event.message.stopReason === "aborted");
-    pi.appendEntry("jevons.recovery", {
-      status: cancelled ? "cancelled" : "observed",
-      ...coverage,
-    });
-    if (
-      !failures ||
-      cancelled ||
-      (event.message.role === "assistant" &&
-        event.message.stopReason === "error")
-    )
-      return;
     const policy = runtime.policy!.recovery;
     const shadow = policy.mode === "shadow";
     const used = shadow ? shadowInterventions : interventions;
     const last = shadow ? lastShadow : lastIntervention;
-    if (
-      used >= policy.maxInterventions ||
-      (last >= 0 && turn - last <= policy.cooldownTurns)
-    )
-      return;
+    const reason = cancelled
+      ? "cancelled"
+      : event.message.role === "assistant" &&
+          event.message.stopReason === "error"
+        ? "assistant-error"
+        : !failures
+          ? "no-failures"
+          : used >= policy.maxInterventions
+            ? "session-cap"
+            : last >= 0 && turn - last <= policy.cooldownTurns
+              ? "cooldown"
+              : "assessment-pending";
+    pi.appendEntry("jevons.recovery", {
+      status: cancelled ? "cancelled" : "observed",
+      mode: policy.mode,
+      reason,
+      ...coverage,
+    });
+    if (reason !== "assessment-pending") return;
     pending?.abort();
     const controller = new AbortController();
     pending = controller;

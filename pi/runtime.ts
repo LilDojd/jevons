@@ -106,7 +106,7 @@ export class Runtime {
         !(await ctx.ui.confirm(
           "Enable Jevons?",
           [
-            "Jevons shares task text, skill metadata, tool arguments, bounded diagnostic outcomes and selected source with TypeSafe. Explicit PR reviews fetch source from github.com using gh.",
+            "Jevons shares conversation text, skill metadata, tool arguments, bounded diagnostic outcomes and selected source with TypeSafe. Explicit PR reviews fetch source from github.com using gh.",
             "Reported token usage is visible. Jevons does not enforce token spending limits.",
             `Models: ${policy.autopilot.models}. Skills: ${policy.autopilot.skills ? "load selected" : "off"}. Automatic review: ${policy.review.automatic ? "on" : "off"}.`,
             policy.writer

@@ -9,6 +9,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { registerAutopilot } from "../pi/autopilot.ts";
 import { Runtime } from "../pi/runtime.ts";
+import { parseRequest } from "../pi/schema.ts";
 import { defaultPolicy } from "../pi/policy.ts";
 import { assessTool, planTask } from "../src/autopilot.ts";
 import type {
@@ -104,7 +105,8 @@ test("planning skips disabled and absent candidates without evaluation", async (
     );
     assert.deepEqual(plan.skills, []);
     assert.equal(plan.model, undefined);
-    assert.equal(plan.evaluation, undefined);
+    assert.deepEqual(plan.evaluations, []);
+    assert.equal(plan.assessedSkills, 0);
     assert.ok(plan.coverage.length);
   }
 });
@@ -158,7 +160,8 @@ test("skill relevance is independent per named item and paths remain local", asy
       probability: 0.93,
     })),
   );
-  assert.equal(plan.evaluation, captured);
+  assert.deepEqual(plan.evaluations, [captured]);
+  assert.equal(plan.assessedSkills, skills.length);
   assert.match(plan.coverage, /3 of 3 assessed; 0 omitted/);
 });
 
@@ -184,19 +187,22 @@ test("semantic utility reverses input order and retains zero-overlap synonyms", 
   );
   assert.deepEqual(
     plan.skills.map((item) => item.name),
-    ["query-tuning", "profiling", "metrics"],
+    ["query-tuning", "profiling", "metrics", "slow-searches"],
   );
   assert.match(plan.coverage, /5 of 5 assessed; 0 omitted/);
-  assert.match(plan.coverage, /1 qualifying skills omitted/);
-  assert.equal(plan.evaluation!.answers.skill0!.type, "noul");
+  assert.match(plan.coverage, /1 below the relevance threshold/);
+  assert.equal(plan.evaluations[0]!.answers.skill0!.type, "noul");
 });
 
-test("candidate admission has explicit count and serialized byte bounds, not lexical ranking", async () => {
+test("batches assess the first 512 candidates within count and byte bounds", async () => {
   for (const description of ["Database", "\u0000".repeat(900)]) {
     const skills = Array.from({ length: 520 }, (_, index) =>
       skill(`candidate-${index}`, description),
     );
     let assessed = 0;
+    let modelQuestions = 0;
+    const batchSizes: number[] = [];
+    const seen = new Set<string>();
     const plan = await planTask(
       "Database",
       skills,
@@ -204,8 +210,17 @@ test("candidate admission has explicit count and serialized byte bounds, not lex
       current,
       policy,
       async (request) => {
-        assessed = Object.keys(request.questions).length - 1;
-        assert.ok(assessed > 0 && assessed <= 31);
+        parseRequest(request);
+        const ids = Object.keys(request.questions).filter(
+          (id) => id !== "model",
+        );
+        assessed += ids.length;
+        modelQuestions += Number(!!request.questions.model);
+        batchSizes.push(ids.length);
+        for (const id of ids) {
+          assert.ok(!seen.has(id));
+          seen.add(id);
+        }
         assert.ok(Buffer.byteLength(JSON.stringify(request)) <= 48_000);
         assert.ok(
           Buffer.byteLength(JSON.stringify(request.state)) +
@@ -219,11 +234,15 @@ test("candidate admission has explicit count and serialized byte bounds, not lex
         return positive(request);
       },
     );
-    if (description === "Database") assert.equal(assessed, 31);
-    else assert.ok(assessed < 31);
+    assert.equal(assessed, 512);
+    assert.equal(plan.assessedSkills, 512);
+    assert.equal(modelQuestions, 1);
+    assert.equal(plan.evaluations.length, batchSizes.length);
+    if (description === "Database") assert.equal(batchSizes[0], 31);
+    else assert.ok(Math.max(...batchSizes) < 31);
     assert.deepEqual(
       plan.skills.map((item) => item.name),
-      ["candidate-0", "candidate-1", "candidate-2"],
+      skills.slice(0, 512).map((item) => item.name),
     );
     assert.match(
       plan.coverage,
@@ -233,6 +252,176 @@ test("candidate admission has explicit count and serialized byte bounds, not lex
     assert.match(plan.coverage, /not judged/);
   }
 });
+
+for (const models of ["off", "suggest"] as const) {
+  test(`all qualifying skills across batches are selected with model routing ${models}`, async () => {
+    const skills = Array.from({ length: 44 }, (_, index) =>
+      skill(`candidate-${index}`),
+    );
+    const probabilities = new Map([
+      [0, 0.82],
+      [2, 0.95],
+      [31, 0.88],
+      [32, 0.95],
+      [38, 0.99],
+      [43, 0.8],
+    ]);
+    const controller = new AbortController();
+    const requests: Request[] = [];
+    const evaluations: Evaluation[] = [];
+    let active = 0;
+    const plan = await planTask(
+      "Analyze database queries",
+      skills,
+      profiles,
+      current,
+      { ...policy, models },
+      async (request, signal) => {
+        assert.equal(signal, controller.signal);
+        assert.equal(++active, 1, "Batches must not overlap");
+        parseRequest(request);
+        requests.push(request);
+        await Promise.resolve();
+        active--;
+        const evaluation = await positive(request);
+        evaluation.model = `jev-batch-${evaluations.length}`;
+        for (const id of Object.keys(request.questions)) {
+          if (id === "model") continue;
+          evaluation.answers[id] = {
+            type: "noul",
+            noul: probabilities.get(Number(id.slice(5))) ?? 0.01,
+          };
+          const metadata = (request.state as Record<string, unknown>)[id];
+          assert.deepEqual(Object.keys(metadata as object).sort(), [
+            "description",
+            "name",
+          ]);
+        }
+        evaluations.push(evaluation);
+        return evaluation;
+      },
+      controller.signal,
+    );
+    assert.equal(plan.assessedSkills, 44);
+    assert.equal(requests.length, 2);
+    assert.equal(Object.keys(requests[0]!.questions).length, 32);
+    assert.equal(
+      requests.filter((request) => request.questions.model).length,
+      models === "off" ? 0 : 1,
+    );
+    assert.deepEqual(plan.evaluations, evaluations);
+    assert.deepEqual(
+      plan.evaluations.map((evaluation) => evaluation.model),
+      ["jev-batch-0", "jev-batch-1"],
+    );
+    assert.deepEqual(
+      plan.skills.map((item) => item.name),
+      [38, 2, 32, 31, 0, 43].map((index) => skills[index]!.name),
+    );
+    assert.deepEqual(
+      plan.skills.map((item) => item.probability),
+      [0.99, 0.95, 0.95, 0.88, 0.82, 0.8],
+    );
+    assert.deepEqual(plan.model, models === "off" ? undefined : profiles[0]);
+    assert.match(plan.coverage, /44 of 44 assessed; 0 omitted/);
+    assert.match(plan.coverage, /38 below the relevance threshold/);
+  });
+}
+
+test("a skill that cannot fit alone is omitted without blocking later eligible skills", async () => {
+  const skills = [
+    skill("early"),
+    { ...skill("explicit", "PRIVATE_METADATA"), disableModelInvocation: true },
+    skill("invalid", ""),
+    skill("early"),
+    skill("cannot-fit-alone", "\u0000".repeat(900)),
+    skill("late"),
+  ];
+  const task = "\u0000".repeat(3600) + "Database";
+  const assessedNames: string[] = [];
+  const plan = await planTask(
+    task,
+    skills,
+    [],
+    current,
+    policy,
+    async (request) => {
+      parseRequest(request);
+      assert.ok(!JSON.stringify(request).includes("PRIVATE_METADATA"));
+      for (const key of Object.keys(request.questions))
+        assessedNames.push(
+          ((request.state as Record<string, unknown>)[key] as { name: string })
+            .name,
+        );
+      return positive(request);
+    },
+  );
+  assert.deepEqual(assessedNames, ["early", "late"]);
+  assert.equal(plan.assessedSkills, 2);
+  assert.deepEqual(
+    plan.skills.map((item) => item.name),
+    ["early", "late"],
+  );
+  assert.match(plan.coverage, /2 of 6 assessed; 4 omitted/);
+  assert.match(
+    plan.coverage,
+    /explicit-only 1, invalid metadata 1, duplicate 1, cannot fit one request 1/,
+  );
+  const none = await planTask(task, [skills[4]!], [], current, policy, never);
+  assert.equal(none.assessedSkills, 0);
+  assert.deepEqual(none.evaluations, []);
+  assert.match(none.coverage, /cannot fit one request 1/);
+});
+
+for (const failure of [
+  "service",
+  "cancelled",
+  "malformed",
+  "between-batches",
+] as const) {
+  test(`${failure} failure stops later batches without returning partial selections`, async () => {
+    const controller = new AbortController();
+    const reason = new Error(`Original ${failure} failure`);
+    const completed: Evaluation[] = [];
+    let calls = 0;
+    await assert.rejects(
+      planTask(
+        "Database",
+        Array.from({ length: 96 }, (_, index) => skill(`candidate-${index}`)),
+        [],
+        current,
+        { ...policy, models: "off" },
+        async (request, signal) => {
+          assert.equal(signal, controller.signal);
+          calls++;
+          if (calls === 2 && failure === "service") throw reason;
+          const evaluation =
+            calls === 2 && failure === "malformed"
+              ? result({})
+              : await positive(request);
+          completed.push(evaluation);
+          if (
+            (calls === 1 && failure === "between-batches") ||
+            (calls === 2 && failure === "cancelled")
+          )
+            controller.abort(reason);
+          return evaluation;
+        },
+        controller.signal,
+      ),
+      (error) =>
+        failure === "malformed"
+          ? error instanceof Error && /Missing Noul/.test(error.message)
+          : error === reason,
+    );
+    assert.equal(calls, failure === "between-batches" ? 1 : 2);
+    assert.equal(
+      completed.length,
+      failure === "service" || failure === "between-batches" ? 1 : 2,
+    );
+    assert.ok(Object.keys(completed[0]!.answers).length > 0);
+  });
+}
 
 test("invalid metadata, duplicate and explicit-only skills are omitted, unrelated skills can select none", async () => {
   const skills = [
@@ -280,7 +469,7 @@ test("invalid metadata, duplicate and explicit-only skills are omitted, unrelate
     policy,
     never,
   );
-  assert.equal(none.evaluation, undefined);
+  assert.deepEqual(none.evaluations, []);
   assert.match(none.coverage, /0 of 1 assessed; 1 omitted/);
 });
 
@@ -317,7 +506,7 @@ test("one model Choice includes supplied descriptions and keeping current; switc
     assert.equal(calls, 1);
     assert.deepEqual(plan.model, profiles[0]);
     assert.equal(plan.probability, 0.9);
-    assert.equal(plan.evaluation!.model, "jev-test-version");
+    assert.equal(plan.evaluations[0]!.model, "jev-test-version");
   }
 });
 
@@ -347,7 +536,7 @@ test("uncertainty and keeping current produce no selections while retaining raw 
     assert.deepEqual(plan.skills, []);
     assert.equal(plan.model, undefined);
     assert.equal(plan.probability, choice === "keep" ? 0.9 : 0.55);
-    assert.equal(plan.evaluation!.answers.skill0!.type, "noul");
+    assert.equal(plan.evaluations[0]!.answers.skill0!.type, "noul");
   }
   const tie = await planTask(
     "Database",
@@ -531,7 +720,7 @@ test("oversized tool evidence, invalid counts and incomplete assessments fail wi
   );
 });
 
-test("optional loading preserves native instructions and enforces body, total and discovered-file limits", async (t) => {
+test("optional loading preserves native instructions and enforces individual body and discovered-file limits", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "jev-autopilot-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const handlers = new Map<
@@ -584,10 +773,9 @@ test("optional loading preserves native instructions and enforces body, total an
   const loaded = await run(skills.slice(0, 3));
   assert.ok(loaded.systemPrompt.startsWith(native));
   assert.ok(loaded.systemPrompt.includes("a".repeat(11000)));
-  assert.ok(!loaded.systemPrompt.includes("b".repeat(10000)));
+  assert.ok(loaded.systemPrompt.includes("b".repeat(10000)));
   assert.ok(loaded.systemPrompt.includes("THIRD_BODY"));
   assert.ok(!loaded.systemPrompt.includes("UNDISCOVERED_BODY"));
-  assert.match(loaded.message.content, /Skill omitted: second/);
   await writeFile(skills[0]!.filePath, "é".repeat(6001));
   await rm(skills[1]!.filePath);
   await symlink(skills[3]!.filePath, skills[1]!.filePath);
@@ -600,8 +788,85 @@ test("optional loading preserves native instructions and enforces body, total an
   runtime.evaluator = () => evaluator(() => ({ type: "noul", noul: 0.01 }));
   const none = await run(skills.slice(0, 3));
   assert.equal(none.systemPrompt, native);
-  assert.match(none.message.content, /Selected 0/);
+  assert.match(none.message.content, /0 selected/);
+  assert.match(none.message.content, /3\/3 assessed/);
+  assert.equal(none.message.details.kind, "autopilot");
+  assert.ok(!none.message.content.includes(none.message.details.coverage));
+  const partial = await run(
+    Array.from({ length: 44 }, (_, index) => ({
+      name: `candidate-${index}`,
+      description: "Task guidance",
+      filePath: join(root, `candidate-${index}`),
+    })),
+  );
+  assert.match(partial.message.content, /44\/44 assessed/);
+  assert.match(partial.message.details.coverage, /0 omitted/);
   assert.equal(await run(skills, "/skill:first"), undefined);
+});
+
+test("native turn cancellation stops skill batches without prompt changes or warnings", async () => {
+  const handlers = new Map<
+    string,
+    (event: any, ctx: ExtensionContext) => any
+  >();
+  const notifications: unknown[] = [];
+  const messages: unknown[] = [];
+  const pi = {
+    on: (name: string, handler: (event: any, ctx: ExtensionContext) => any) =>
+      handlers.set(name, handler),
+    sendMessage: (message: unknown) => messages.push(message),
+  } as unknown as ExtensionAPI;
+  const runtime = new Runtime(pi);
+  runtime.active = true;
+  runtime.policy = {
+    ...defaultPolicy,
+    autopilot: { ...policy, models: "off" },
+    profiles: [],
+  };
+  const turn = new AbortController();
+  let calls = 0;
+  runtime.evaluator = () => async (request, signal) => {
+    assert.ok(signal);
+    assert.equal(signal.aborted, false);
+    if (++calls === 2) {
+      turn.abort();
+      assert.equal(signal.aborted, true);
+    }
+    return positive(request);
+  };
+  registerAutopilot(pi, runtime);
+  const ctx = {
+    signal: turn.signal,
+    model: { provider: "test", id: "current" },
+    scopedModels: [],
+    modelRegistry: { getAvailable: () => [] },
+    getContextUsage: () => undefined,
+    sessionManager: { getBranch: () => [] },
+    hasUI: true,
+    ui: { notify: (...args: unknown[]) => notifications.push(args) },
+  } as unknown as ExtensionContext;
+  const event = {
+    prompt: "Database",
+    systemPrompt: "Native mandatory instructions",
+    systemPromptOptions: {
+      skills: Array.from({ length: 96 }, (_, index) => ({
+        name: `candidate-${index}`,
+        description: "Database query guidance",
+        filePath: `/synthetic/skills/${index}/SKILL.md`,
+      })),
+    },
+  };
+  const original = structuredClone(event);
+  handlers.get("input")!({ source: "interactive", text: event.prompt }, ctx);
+  assert.equal(
+    await handlers.get("before_agent_start")!(event, ctx),
+    undefined,
+  );
+  assert.equal(calls, 2);
+  assert.equal(runtime.controller.signal.aborted, false);
+  assert.deepEqual(event, original);
+  assert.deepEqual(messages, []);
+  assert.deepEqual(notifications, []);
 });
 
 test("cancellation is forwarded, stale results discarded and service failures not retried", async () => {
