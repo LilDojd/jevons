@@ -34,7 +34,7 @@ jobs:
           else
             echo 'Main changed after this run started; leave release work to the newer run.'
           fi
-      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         if: steps.current.outputs.current == 'true'
         with:
           token: ${{ github.token }}
