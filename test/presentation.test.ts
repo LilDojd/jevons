@@ -556,6 +556,17 @@ test("compaction batches stay out of collapsed chat while raw receipts and one a
     ),
     undefined,
   );
+  for (const status of ["failed", "cancelled"] as const) {
+    const outcome = entries.get("jevons.receipt")!(
+      { data: { ...data, status } } as Parameters<Renderer>[0],
+      { expanded: false } as Parameters<Renderer>[1],
+      theme,
+    );
+    assert.ok(outcome);
+    const shown = outcome.render(200).join("\n");
+    assert.ok(shown.includes(status));
+    assert.ok(!shown.includes("PRIVATE_SOURCE"));
+  }
   const expanded = entries.get("jevons.receipt")!(
     entry,
     { expanded: true } as Parameters<Renderer>[1],

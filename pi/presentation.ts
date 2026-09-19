@@ -525,7 +525,12 @@ export function registerPresentation(pi: ExtensionAPI): void {
     (entry, { expanded }, theme) => {
       const receipt = entry.data;
       if (!receipt) return new Text("Jevons receipt: unavailable", 0, 0);
-      if (receipt.purpose === "Compaction" && !expanded) return undefined;
+      if (
+        receipt.purpose === "Compaction" &&
+        receipt.status === "completed" &&
+        !expanded
+      )
+        return undefined;
       return new Text(
         formatRestoredDetails(() => {
           const tokens = receipt.usage
