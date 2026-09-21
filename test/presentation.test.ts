@@ -7,13 +7,11 @@ import {
 	formatEvaluation,
 	formatReceiptDetails,
 	formatRecoveryDetails,
-	formatReviewDetails,
 	registerPresentation,
 	safeText,
 } from "../pi/presentation.ts";
 import type { Receipt } from "../pi/service.ts";
 import type { Evaluation, Request } from "../src/contracts.ts";
-import type { DiffReport } from "../src/diff-review.ts";
 
 const request: Request = {
 	state: {
@@ -252,100 +250,6 @@ test("source-free receipt allowlist never renders attached request or writer sou
 			usage: undefined,
 		}),
 		["requested or reported", "unknown", "no judgment available"],
-	);
-});
-
-const report: DiffReport = {
-	status: "review",
-	complete: false,
-	fingerprint: "pinned-sha",
-	comparison: "base-sha..head-sha",
-	files: ["new.ts"],
-	reviewedChunks: 1,
-	totalChunks: 2,
-	findings: [
-		{
-			id: "chunk1",
-			path: "new.ts",
-			oldPath: "old.ts",
-			oldStart: 4,
-			oldLines: 2,
-			newStart: 8,
-			newLines: 3,
-			added: 2,
-			deleted: 1,
-			rule: "correctness",
-			label: "Correctness",
-			criterion: "Does the visible change introduce a bug?",
-			probability: 0.8123456789012345,
-			status: "concern",
-		},
-	],
-	omitted: ["chunk2: evaluation unavailable"],
-	evaluations: [
-		{
-			...evaluation,
-			answers: { q: { type: "noul", noul: 0.8123456789012345 } },
-		},
-	],
-	questionMaps: [
-		{
-			q: { chunkId: "chunk1", path: "new.ts", rule: "correctness" },
-			missing: { chunkId: "chunk2", path: "new.ts", rule: "correctness" },
-		},
-	],
-};
-
-test("review details expose coverage, pinned comparison, exact ranges, criteria and missing mapped answers", () => {
-	const text = formatReviewDetails(report);
-	contains(text, [
-		"PARTIAL",
-		"1/2",
-		"base-sha..head-sha",
-		"pinned-sha",
-		"old.ts",
-		"4–5 (2 lines)",
-		"8–10 (3 lines)",
-		"+2 / -1",
-		"correctness",
-		"Does the visible change introduce a bug?",
-		"0.8123456789012345",
-		"chunk2: evaluation unavailable",
-		"Batch 1",
-		evaluation.model,
-		"127ms",
-		"missing",
-		"not assessed",
-		"ranges for non-finding chunks are not retained",
-	]);
-	const all = formatReviewDetails({
-		...report,
-		findings: Array.from({ length: 22 }, (_, index) => ({
-			...report.findings[0]!,
-			id: `finding-${index}`,
-		})),
-		omitted: Array.from({ length: 12 }, (_, index) => `omission-${index}`),
-	});
-	contains(all, ["finding-21", "omission-11"]);
-	contains(formatReviewDetails(), ["unavailable", "No coverage established"]);
-	contains(
-		formatReviewDetails({
-			...report,
-			questionMaps: [{ toString: report.questionMaps[0]!.q! }],
-			evaluations: [
-				{
-					...evaluation,
-					answers: { constructor: { type: "noul" as const, noul: 0.2 } },
-				},
-			],
-		}),
-		[
-			"toString",
-			"Answer: missing; not assessed.",
-			"constructor",
-			"question mapping missing",
-			"P(true) = 0.2",
-		],
 	);
 });
 
@@ -624,7 +528,6 @@ test("registered expanded renderers wrap at narrow widths and activity receipts 
 		[null],
 		[{ purpose: "Decision", request: { state: "SECRET_SOURCE" } }],
 		{ selection: null, results: [] },
-		{ reviewedChunks: 1 },
 		{ result: { model: "old", answers: {} } },
 	]) {
 		const restored = messages.get("jevons")!(
@@ -659,6 +562,6 @@ test("registered expanded renderers wrap at narrow widths and activity receipts 
 		contains(text, ["unavailable", "malformed"]);
 		assert.ok(!text.includes("SECRET_SOURCE"));
 	}
-	const narrow = new Text(formatReviewDetails(report), 0, 0).render(24);
+	const narrow = new Text(formatDecisionDetails({ request, result: evaluation }), 0, 0).render(24);
 	assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
 });

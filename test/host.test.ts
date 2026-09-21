@@ -157,7 +157,7 @@ test("real Node 24 Pi loads the extension and handles paused commands without ne
 			),
 		);
 		await command({ type: "prompt", message: "/jevons pause" });
-		await command({ type: "prompt", message: "/jevons review absent.ts" });
+		await command({ type: "prompt", message: "/jevons gate" });
 		await command({ type: "prompt", message: "/jevons settings" });
 		assert.ok(
 			events.some(

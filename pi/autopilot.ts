@@ -240,11 +240,5 @@ export function registerAutopilot(pi: ExtensionAPI, runtime: Runtime): void {
 	pi.on("tool_result", (event) => {
 		if (!event.toolName.startsWith("jevons_"))
 			runtime.failures = event.isError ? runtime.failures + 1 : 0;
-		if (
-			!event.isError &&
-			["write", "edit"].includes(event.toolName) &&
-			typeof event.input.path === "string"
-		)
-			runtime.edits.add(event.input.path);
 	});
 }

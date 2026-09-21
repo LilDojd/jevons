@@ -69,12 +69,6 @@ export interface DiffSnapshot {
 	omitted: string[];
 }
 
-export interface Rule {
-	id: string;
-	label: string;
-	instructions: string;
-}
-
 export interface CheckConfig {
 	name: string;
 	argv: string[];
@@ -100,14 +94,6 @@ export interface Policy {
 	};
 	profiles: ModelProfile[];
 	writer?: { provider: string; model: string };
-	review: {
-		automatic: boolean;
-		investigate: boolean;
-		investigateConcern: number;
-		concern: number;
-		clear: number;
-		rules: Rule[];
-	};
 	verification: { select: boolean; relevance: number };
 	checks: CheckConfig[];
 }

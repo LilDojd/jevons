@@ -7,7 +7,7 @@ import type { TestContext } from "node:test";
 import test from "node:test";
 import { promisify } from "node:util";
 import { createTwoFilesPatch, parsePatch } from "diff";
-import { collectLocalDiff, collectPullRequestDiff, parseDiff } from "../pi/diff.ts";
+import { collectLocalDiff, parseDiff } from "../pi/diff.ts";
 
 function gitPatch(path: string, old: string, next: string) {
 	return `diff --git a/${path} b/${path}\n${createTwoFilesPatch(`a/${path}`, `b/${path}`, old, next, undefined, undefined, { headerOptions: { includeIndex: false, includeUnderline: false, includeFileHeaders: true } })}`;
@@ -170,7 +170,7 @@ async function fakeCommands(t: TestContext, data: object) {
 	const fixture = join(root, "fixture.json"),
 		calls = join(root, "calls.jsonl");
 	await fs.writeFile(fixture, JSON.stringify(data));
-	for (const binary of ["jj", "git", "gh"]) {
+	for (const binary of ["jj", "git"]) {
 		await fs.writeFile(
 			join(bin, binary),
 			`#!/usr/bin/env node
@@ -183,11 +183,6 @@ if (args.includes('log')) output = data.revision;
 else if (args.includes('rev-parse')) output = data.head;
 else if (args.includes('ls-files')) output = data.untracked ?? '';
 else if (args.includes('diff')) output = args.includes('--ignore-working-copy') ? '' : data.patch;
-else if (args.at(-1).includes('/compare/')) output = data.patch;
-else {
- const seen = fs.readFileSync(${JSON.stringify(calls)}, 'utf8').split('\\n').filter(line => line.includes('/pulls/')).length;
- output = JSON.stringify({base:{sha:data.base},head:{sha:seen>1 && data.moved ? data.moved : data.head}});
-}
 process.stdout.write(output);
 `,
 			{ mode: 0o700 },
@@ -298,56 +293,4 @@ test("local collection stops at a nested Git repository rather than selecting ou
 	assert.deepEqual(snapshot.files, ["a.ts"]);
 	assert.deepEqual(snapshot.omitted, []);
 	assert.doesNotMatch(await fs.readFile(fixture.calls, "utf8"), /"binary":"jj"/);
-});
-
-test("remote collection rejects deceptive destinations before invoking gh", async (t) => {
-	const fixture = await fakeCommands(t, {});
-	for (const url of [
-		"http://github.com/example/project/pull/12",
-		"https://github.com.evil.invalid/example/project/pull/12",
-		"https://github.com@evil.invalid/example/project/pull/12",
-		"https://evil.invalid@github.com/example/project/pull/12",
-		"https://github.com:8443/example/project/pull/12",
-		"https://github.com/example/project/pull/12?redirect=https://evil.invalid",
-		"https://github.com/example/project/pull/12#fragment",
-		"https://github.com/example/%2e%2e/pull/12",
-		"https://github.com/example/project/pull/12/../../elsewhere",
-		"https://github.com/example\\project/pull/12",
-	])
-		await assert.rejects(collectPullRequestDiff(url), /Expected a GitHub/);
-	await assert.rejects(fs.stat(fixture.calls), { code: "ENOENT" });
-});
-
-test("remote collection requests only a pinned comparison diff and invalidates moved revisions", async (t) => {
-	const base = "a".repeat(40),
-		head = "b".repeat(40);
-	const patch = gitPatch("gone.ts", "deleted\n", "");
-	const fixture = await fakeCommands(t, { base, head, patch });
-	const first = await collectPullRequestDiff("https://github.com/example/project/pull/12");
-	assert.deepEqual(first.omitted, []);
-	assert.equal(first.chunks[0]!.deleted, 1);
-	const calls = (await fs.readFile(fixture.calls, "utf8"))
-		.trim()
-		.split("\n")
-		.map((line) => JSON.parse(line));
-	assert.equal(calls.length, 3);
-	assert.equal(calls[1].args.at(-1), `repos/example/project/compare/${base}...${head}`);
-	assert.ok(calls[1].args.includes("Accept: application/vnd.github.diff"));
-	assert.ok(calls.every((call) => call.args.includes("GET")));
-	assert.ok(calls.every((call) => call.args[call.args.indexOf("--hostname") + 1] === "github.com"));
-	await fs.writeFile(fixture.calls, "");
-	await fs.writeFile(fixture.fixture, JSON.stringify({ base, head, patch, moved: "c".repeat(40) }));
-	await assert.rejects(
-		collectPullRequestDiff("https://github.com/example/project/pull/12"),
-		/revisions changed/,
-	);
-	await fs.writeFile(fixture.fixture, JSON.stringify({ base, head: "d".repeat(40), patch }));
-	const changed = await collectPullRequestDiff("https://github.com/example/project/pull/12");
-	assert.notEqual(changed.fingerprint, first.fingerprint);
-	const abort = new AbortController();
-	abort.abort();
-	await assert.rejects(
-		collectPullRequestDiff("https://github.com/example/project/pull/12", abort.signal),
-	);
-	await assert.rejects(collectPullRequestDiff("https://gitlab.com/example/project/pull/12"));
 });

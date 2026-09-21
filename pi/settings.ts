@@ -39,20 +39,6 @@ const fields = [
 		["off", "shadow", "steer"],
 	],
 	[
-		"review",
-		"automatic",
-		"Automatic review",
-		"Review edited files when the agent settles. Does not run checks.",
-		["on", "off"],
-	],
-	[
-		"review",
-		"investigate",
-		"Review investigation",
-		"Allow one focused coding-model follow-up per unchanged snapshot. This has an additional model cost.",
-		["off", "on"],
-	],
-	[
 		"verification",
 		"select",
 		"Select optional checks",
@@ -65,27 +51,6 @@ const fields = [
 		"Skill / model threshold",
 		"Minimum described utility or preference for automatic selection.",
 		["0.5", "0.6", "0.7", "0.8", "0.9", "0.95", "1"],
-	],
-	[
-		"review",
-		"concern",
-		"Review concern threshold",
-		"High concern is not proof of a defect.",
-		["0.6", "0.7", "0.8", "0.9", "0.95", "1"],
-	],
-	[
-		"review",
-		"clear",
-		"Review low-concern threshold",
-		"Lower probabilities still do not approve merging.",
-		["0", "0.1", "0.2", "0.3", "0.4"],
-	],
-	[
-		"review",
-		"investigateConcern",
-		"Investigation threshold",
-		"Minimum concern for the separately enabled investigation.",
-		["0.7", "0.8", "0.9", "0.95", "1"],
 	],
 	[
 		"recovery",
@@ -132,8 +97,6 @@ function settingValue(policy: Policy, field: Field): boolean | number | string {
 			return policy.autopilot[key];
 		case "recovery":
 			return policy.recovery[key];
-		case "review":
-			return policy.review[key];
 		case "verification":
 			return policy.verification[key];
 	}
@@ -215,7 +178,7 @@ export async function openSettings(ctx: ExtensionContext, runtime: Runtime): Pro
 						container.addChild(heading);
 						container.addChild(
 							new Text(
-								"User preferences follow you across sessions and projects. Saved in the Pi agent directory, outside settings.json. Checks, profiles and review rules stay in project jevons.json. Changes cancel active Jev work and checks; paused stays paused.",
+								"User preferences follow you across sessions and projects. Saved in the Pi agent directory, outside settings.json. Checks and profiles stay in project jevons.json. Changes cancel active Jev work and checks; paused stays paused.",
 								1,
 								1,
 							),
@@ -249,7 +212,7 @@ export async function openSettings(ctx: ExtensionContext, runtime: Runtime): Pro
 									currentValue: "reset",
 									values: ["reset"],
 									description:
-										"Save built-in preference defaults for all new sessions. Project checks, profiles and rules remain unchanged.",
+										"Save built-in preference defaults for all new sessions. Project checks and profiles remain unchanged.",
 								},
 							],
 							Math.min(18, Math.max(4, tui.terminal.rows - 10)),
@@ -335,7 +298,7 @@ export async function openSettings(ctx: ExtensionContext, runtime: Runtime): Pro
 			let text = JSON.stringify(preferencesOf(policy), null, 2);
 			while (fresh()) {
 				const edited = await ctx.ui.editor(
-					"Jevons user preferences · Save persists across sessions. Checks, profiles and rules are project-only.",
+					"Jevons user preferences · Save persists across sessions. Checks and profiles are project-only.",
 					text,
 				);
 				if (!fresh() || edited === undefined) break;

@@ -49,7 +49,6 @@ export async function verifyConfigured(
 	const omitted: string[] = [];
 	let snapshot: DiffSnapshot | undefined;
 	try {
-		// Verification concerns the entire workspace, not only the requested review paths.
 		snapshot = await collectLocalDiff(ctx.cwd, [], signal);
 		omitted.push(...snapshot.omitted);
 	} catch {

@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { Answer, Evaluation, Question, Request } from "../src/contracts.ts";
-import type { DiffReport } from "../src/diff-review.ts";
 import type { AuthoredQuestions } from "./author.ts";
 import type { Receipt } from "./service.ts";
 import type { VerificationRun } from "./verify.ts";
@@ -183,69 +182,6 @@ export function formatDecisionDetails(details?: DecisionDetails): string {
 				: "No questions or answers retained.",
 		),
 		"Model judgments are not proof or authorization.",
-	].join("\n\n");
-}
-
-const range = (start: number, count: number) =>
-	count ? `${start}–${start + count - 1} (${count} lines)` : `${start} (no lines)`;
-
-export function formatReviewDetails(report?: DiffReport): string {
-	if (!report) return "Review details: unavailable. No coverage established.";
-	return [
-		section(
-			"Review coverage",
-			[
-				`Status: ${report.status} · ${report.complete ? "complete" : "PARTIAL — not a clean review"}`,
-				`Changed chunks: ${report.reviewedChunks}/${report.totalChunks} fully reviewed`,
-				`Comparison: ${label(report.comparison)}`,
-				`Fingerprint: ${label(report.fingerprint)}`,
-				`Files (${report.files.length}):\n${report.files.map(label).join("\n") || "none"}`,
-			].join("\n"),
-		),
-		section(
-			`Findings (${report.findings.length})`,
-			report.findings
-				.map((finding) =>
-					[
-						`${label(finding.path)} [${label(finding.id)}] · ${finding.status} · raw P(concern) = ${finding.probability}`,
-						`Old: ${label(finding.oldPath)} · ${range(finding.oldStart, finding.oldLines)}`,
-						`New: ${label(finding.path)} · ${range(finding.newStart, finding.newLines)} · +${finding.added} / -${finding.deleted}`,
-						`Rule: ${label(finding.rule)} · ${label(finding.label)}`,
-						`Criterion:\n${indent(finding.criterion)}`,
-					].join("\n"),
-				)
-				.join("\n\n") || "None recorded. See coverage and omissions.",
-		),
-		section(
-			`Omissions (${report.omitted.length})`,
-			report.omitted.map((item) => `- ${safeText(item)}`).join("\n") || "None reported.",
-		),
-		section(
-			"Jev batches and raw answers",
-			Array.from(
-				{
-					length: Math.max(report.evaluations.length, report.questionMaps.length),
-				},
-				(_, index) => {
-					const evaluation = report.evaluations[index];
-					const mapping = report.questionMaps[index] ?? {};
-					const answers = evaluation?.answers ?? {};
-					const ids = [...new Set([...Object.keys(mapping), ...Object.keys(answers)])];
-					return section(
-						`Batch ${index + 1}`,
-						[
-							jevDetails(evaluation),
-							...ids.map((id) => {
-								const location = ownValue(mapping, id);
-								return `${label(id)} · ${location ? `${label(location.path)} [${label(location.chunkId)}] · rule ${label(location.rule)}` : "question mapping missing"}\n${indent(answerDetails(ownValue(answers, id)))}`;
-							}),
-						].join("\n"),
-					);
-				},
-			).join("\n\n") || "No completed evaluations.",
-		),
-		"Request state, full question text and ranges for non-finding chunks are not retained in this report. Findings include their retained rule criteria and ranges.",
-		"Judgments cover individual chunks. They do not establish correctness across chunks or approve merging. Executable checks are separate.",
 	].join("\n\n");
 }
 
@@ -446,7 +382,6 @@ function messageDetails(details: unknown): string {
 			return safeText(details.coverage);
 		if ("selection" in details && "results" in details)
 			return formatVerificationDetails(details as VerificationRun);
-		if ("reviewedChunks" in details) return formatReviewDetails(details as DiffReport);
 		if (
 			"result" in details ||
 			"writer" in details ||

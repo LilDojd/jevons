@@ -50,7 +50,6 @@ test("preferences follow new sessions and projects, never session branches or pr
 		recovery: { mode: "off" },
 		checks: [{ name: "local", argv: ["local-check"], timeoutMs: 1000 }],
 		profiles: [{ provider: "local", model: "local", description: "Project model" }],
-		review: { rules: [{ id: "local", label: "Local", instructions: "Project rule" }] },
 	});
 	const project = JSON.stringify(projectPolicy);
 	await writeFile(join(root, "jevons.json"), project);
@@ -82,10 +81,8 @@ test("preferences follow new sessions and projects, never session branches or pr
 	assert.equal(otherPolicy.recovery.mode, "steer");
 	assert.deepEqual(otherPolicy.checks, []);
 	assert.deepEqual(otherPolicy.profiles, []);
-	assert.deepEqual(otherPolicy.review.rules, defaultPolicy.review.rules);
 	assert.deepEqual(runtime.policy!.checks, projectPolicy.checks);
 	assert.deepEqual(runtime.policy!.profiles, projectPolicy.profiles);
-	assert.deepEqual(runtime.policy!.review.rules, projectPolicy.review.rules);
 	await runtime.resetSettings(ctx);
 	assert.equal(runtime.policy!.recovery.mode, "shadow");
 	assert.equal((await fresh.readPolicy(newCtx)).recovery.mode, "shadow");
@@ -117,13 +114,13 @@ test("live settings invalidate old evaluators without pausing the replacement or
 	});
 	const history = session.getEntries();
 	const next = structuredClone(runtime.policy!);
-	next.review.automatic = false;
+	next.autopilot.skills = false;
 	runtime.updateSettings(ctx, preferencesOf(next));
 	assert.equal(old.signal.aborted, true);
 	assert.equal(runtime.active, true);
 	assert.equal(runtime.controller.signal.aborted, false);
-	assert.equal(runtime.policy!.review.automatic, false);
-	assert.equal((await runtime.readPolicy(ctx)).review.automatic, false);
+	assert.equal(runtime.policy!.autopilot.skills, false);
+	assert.equal((await runtime.readPolicy(ctx)).autopilot.skills, false);
 	await assert.rejects(
 		evaluate({
 			state: {},
@@ -144,7 +141,6 @@ test("invalid settings, lost trust and failed persistence leave the current gene
 		[],
 		{ model: "invalid model" },
 		{ recovery: { maxInterventions: -1 } },
-		{ review: { clear: 0.9, concern: 0.8 } },
 		{ autopilot: null },
 		{ recovery: "" },
 		{ extra: "x".repeat(32001) },
@@ -247,7 +243,10 @@ for (const existingFile of [false, true]) {
 		t.mock.method(ctx.ui, "editor", async (_title: string, prefill?: string) => {
 			if (attempts++) return undefined;
 			const next = JSON.parse(prefill!);
-			other.updateSettings(otherCtx, preferencesOf(parsePolicy({ review: { automatic: false } })));
+			other.updateSettings(
+				otherCtx,
+				preferencesOf(parsePolicy({ verification: { select: false } })),
+			);
 			savedText = await readFile(join(agentDir, "jevons.json"), "utf8");
 			next.autopilot.skills = false;
 			return JSON.stringify(next);
@@ -255,7 +254,7 @@ for (const existingFile of [false, true]) {
 		await openSettings(ctx, runtime);
 		assert.ok(notifications.some((message) => /changed.*Reopen settings/.test(message)));
 		assert.equal(await readFile(join(agentDir, "jevons.json"), "utf8"), savedText);
-		assert.equal((await other.readPolicy(otherCtx)).review.automatic, false);
+		assert.equal((await other.readPolicy(otherCtx)).verification.select, false);
 		assert.equal((await other.readPolicy(otherCtx)).autopilot.skills, true);
 		assert.equal(runtime.controller, controller);
 		assert.equal(controller.signal.aborted, false);

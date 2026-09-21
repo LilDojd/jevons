@@ -17,10 +17,14 @@ type Handler = (event: Record<string, unknown>, ctx: ExtensionContext) => unknow
 async function fixture(t: TestContext, checks: Policy["checks"] = [], toolFeedback = false) {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "jevons-integration-")));
 	const previousKey = process.env.TYPESAFE_API_KEY;
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = join(root, "agent");
 	process.env.TYPESAFE_API_KEY = "integration-test-not-a-credential";
 	t.after(async () => {
 		if (previousKey === undefined) delete process.env.TYPESAFE_API_KEY;
 		else process.env.TYPESAFE_API_KEY = previousKey;
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		await rm(root, { recursive: true, force: true });
 	});
 	const requests: Request[] = [];
@@ -87,10 +91,7 @@ async function fixture(t: TestContext, checks: Policy["checks"] = [], toolFeedba
 
 test("native tool renderers contain malformed saved metadata without dumping its source", async (t) => {
 	const { tools } = await fixture(t);
-	for (const [name, details] of [
-		["jevons_decide", { result: { model: "old-model" } }],
-		["jevons_review", { reviewedChunks: 1 }],
-	] as const) {
+	for (const [name, details] of [["jevons_decide", { result: { model: "old-model" } }]] as const) {
 		const render = tools.get(name)!.renderResult as unknown as (
 			result: unknown,
 			options: { expanded: boolean },
@@ -288,27 +289,6 @@ for (const dialog of ["menu", "prompt", "context"] as const) {
 		assert.equal(h.requests.length, 1);
 	});
 }
-
-test("remote review rejects empty and foreign URLs rather than falling back to local source", async (t) => {
-	const h = await fixture(t);
-	for (const url of [
-		"",
-		"https://example.com/org/repo/pull/1",
-		"https://github.com@localhost/org/repo/pull/1",
-	]) {
-		await assert.rejects(
-			h.tools.get("jevons_review")!.execute("review", { url }, undefined, undefined, h.ctx),
-			/Expected a GitHub pull request URL/,
-		);
-	}
-	await assert.rejects(
-		h.tools
-			.get("jevons_review")!
-			.execute("mixed", { url: "", paths: [] }, undefined, undefined, h.ctx),
-		/Supply paths or a PR URL/,
-	);
-	assert.equal(h.requests.length, 0);
-});
 
 test("decision tools reject both or neither question sources before network use", async (t) => {
 	const h = await fixture(t);

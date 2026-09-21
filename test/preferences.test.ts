@@ -26,7 +26,6 @@ test("user preferences validate before publication, reject project authority and
 		{ active: true },
 		{ checks: [] },
 		{ profiles: [] },
-		{ review: { rules: [] } },
 		{ model: "x".repeat(32001) },
 		{ compaction: {} },
 	]) {

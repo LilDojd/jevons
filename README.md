@@ -5,7 +5,7 @@
 
 ![100% slop](https://img.shields.io/badge/%F0%9F%A4%96%20100%25-slop-a3e635?style=plastic&labelColor=4c1d95 "100% LLM-generated")
 
-Jevons uses TypeSafe's Jev model to select skills, review code and suggest failure recovery steps in [Pi](https://github.com/badlogic/pi-mono).
+Jevons uses TypeSafe's Jev model to select skills, choose verification checks and suggest failure recovery steps in [Pi](https://github.com/badlogic/pi-mono).
 
 ## Start
 
@@ -32,21 +32,19 @@ For a declarative installation, enable `dendriticSlop.extensions.jevons.enable` 
 | `/jevons settings`             | Change settings immediately                         |
 | `/jevons pause` / `/jevons on` | Stop requests / resume sharing                      |
 | `/jevons ask QUESTION`         | Supply context and ask a focused question           |
-| `/jevons review PATH…`         | Review selected paths, or all changes with no paths |
-| `/jevons review PR_URL`        | Fetch and review a GitHub PR without executing it   |
-| `/jevons gate PATH…`           | Confirm and run configured checks, then review      |
+| `/jevons gate`                | Select, confirm and run configured checks           |
 | `/jevons usage`                | Show reported token totals and unknown usage        |
 | `/jevons activity PAGE`        | Browse recorded requests without source text        |
 
-The agent can also call `jevons_decide` and `jevons_review`. For filenames with spaces, use the review tool's `paths` array. Press **Ctrl+O** to show questions, probabilities, models, usage and coverage.
+The agent can also call `jevons_decide`. Press **Ctrl+O** to show questions, probabilities, models, usage and coverage.
 
 ## Settings
 
 Use `/jevons settings` to change toggles, thresholds, the question writer or user-preference JSON. Preferences are saved atomically to `~/.pi/agent/jevons.json` (or your `PI_CODING_AGENT_DIR`) and follow you across sessions and projects. They override project preferences; old session-branch settings no longer override them. Existing sessions pick up external changes with `/jevons on` or a reload.
 
-Commands/checks, model-routing profiles and review rules remain in project `jevons.json`; they are never copied into user preferences. Reset saves built-in preference defaults without changing project configuration. Changes cancel pending Jevons work and checks, not the coding agent. Paused sessions stay paused. See [defaults and validation](pi/policy.ts).
+Commands/checks and model-routing profiles remain in project `jevons.json`; they are never copied into user preferences. Reset saves built-in preference defaults without changing project configuration. Changes cancel pending Jevons work and checks, not the coding agent. Paused sessions stay paused. See [defaults and validation](pi/policy.ts).
 
-By default, Jevons assesses eligible skills in batches. It selects all that pass the relevance threshold. It also reviews code automatically. Model routing only suggests changes. Recovery records advice without interruption. Set recovery to `steer` to permit limited replan or ask-user messages. Investigation and pre-tool advice are off. Jevons has no project checks until you add them.
+By default, Jevons assesses eligible skills in batches. It selects all that pass the relevance threshold. Model routing only suggests changes. Recovery records advice without interruption. Set recovery to `steer` to permit limited replan or ask-user messages. Pre-tool advice is off. Jevons has no project checks until you add them.
 
 ## Compaction
 
@@ -56,9 +54,9 @@ The port follows Pi's auto-compaction and `/compact` flow, with `/jev-compact` f
 
 ## Limits and costs
 
-- Confirm checks separately. Checks are mandatory unless you set `mandatory: false`. Uncertain optional checks remain selected. Failed, stale or unrun checks cannot count as verified. Reviews do not approve merges.
+- Confirm checks separately. Checks are mandatory unless you set `mandatory: false`. Uncertain optional checks remain selected. Failed, stale or unrun checks cannot count as verified.
 - Jevons has no spending cap or automatic billed retry. A request failure pauses data sharing. Usage includes all session branches. Unknown usage is not zero. A new session or extension reload enables data sharing again in trusted projects.
-- Jevons limits requests to 48,000 UTF-8 bytes. State plus the longest question must fit within 24,000 bytes. Reviews split patches into 8,000-byte chunks and report missing coverage. Task-based automatic assessments stop if delivered task evidence exceeds 8,000 bytes or includes images.
+- Jevons limits requests to 48,000 UTF-8 bytes. State plus the longest question must fit within 24,000 bytes. Task-based automatic assessments stop if delivered task evidence exceeds 8,000 bytes or includes images.
 - Old results do not verify the current revision. Run checks again when necessary. Jevons does not track changes to ignored files, external services or toolchains.
 
 ## Development

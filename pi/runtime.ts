@@ -25,7 +25,6 @@ export class Runtime {
 	taskRevision = 0;
 	taskOmitted = false;
 	failures = 0;
-	readonly edits = new Set<string>();
 
 	constructor(pi: ExtensionAPI, agentDir = getAgentDir()) {
 		this.pi = pi;
@@ -93,9 +92,9 @@ export class Runtime {
 				!(await ctx.ui.confirm(
 					"Enable Jevons?",
 					[
-						"Jevons shares conversation text, skill metadata, tool arguments, bounded diagnostic outcomes and selected source with TypeSafe. Explicit PR reviews fetch source from github.com using gh.",
+						"Jevons shares conversation text, skill metadata, tool arguments, bounded diagnostic outcomes and selected source with TypeSafe.",
 						"Reported token usage is visible. Jevons does not enforce token spending limits.",
-						`Models: ${policy.autopilot.models}. Skills: ${policy.autopilot.skills ? "load selected" : "off"}. Automatic review: ${policy.review.automatic ? "on" : "off"}.`,
+						`Models: ${policy.autopilot.models}. Skills: ${policy.autopilot.skills ? "load selected" : "off"}.`,
 						policy.writer
 							? `Free-text questions send explicit context to ${policy.writer.provider}/${policy.writer.model} first. This has an additional provider cost.`
 							: "Free-text questions send explicit context to the current coding model first. This has an additional provider cost.",

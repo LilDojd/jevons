@@ -339,8 +339,6 @@ async function command(
 				...process.env,
 				GIT_OPTIONAL_LOCKS: "0",
 				GIT_NO_LAZY_FETCH: "1",
-				GH_PROMPT_DISABLED: "1",
-				GH_DEBUG: "",
 			},
 		});
 		signal.throwIfAborted();
@@ -470,59 +468,5 @@ export async function collectLocalDiff(
 	signal.throwIfAborted();
 	const snapshot = parseDiff(patch, comparison, scope);
 	snapshot.omitted.push(...omitted);
-	return snapshot;
-}
-
-export async function collectPullRequestDiff(
-	url: string,
-	lifetime?: AbortSignal,
-): Promise<DiffSnapshot> {
-	const match =
-		/^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9_.-]{0,99}\/[A-Za-z0-9][A-Za-z0-9_.-]{0,99})\/pull\/([1-9][0-9]{0,9})\/?$/.exec(
-			url,
-		);
-	if (!match?.[1]) throw new Error("Expected a GitHub pull request URL.");
-	const signal = AbortSignal.any([AbortSignal.timeout(60_000), ...(lifetime ? [lifetime] : [])]);
-	const repository = match[1];
-	const api = (endpoint: string, diff = false) =>
-		command(
-			"gh",
-			[
-				"api",
-				"--hostname",
-				"github.com",
-				"--method",
-				"GET",
-				"-H",
-				`Accept: ${diff ? "application/vnd.github.diff" : "application/vnd.github+json"}`,
-				endpoint,
-			],
-			"/",
-			signal,
-		);
-	const metadata = async () => {
-		try {
-			const value = JSON.parse(await api(`repos/${repository}/pulls/${match[2]}`));
-			const base: unknown = value?.base?.sha,
-				head: unknown = value?.head?.sha;
-			if (
-				typeof base !== "string" ||
-				typeof head !== "string" ||
-				!/^[a-f0-9]{40}$/.test(base) ||
-				!/^[a-f0-9]{40}$/.test(head)
-			)
-				throw new Error("Invalid revision");
-			return `${base}...${head}`;
-		} catch {
-			throw new Error("Pull request revisions unavailable or cancelled.");
-		}
-	};
-	const revisions = await metadata();
-	const patch = await api(`repos/${repository}/compare/${revisions}`, true);
-	const current = await metadata();
-	signal.throwIfAborted();
-	const snapshot = parseDiff(patch, `github ${repository}#${match[2]} ${revisions}`);
-	if (current !== revisions)
-		throw new Error("Pull request revisions changed during diff collection.");
 	return snapshot;
 }

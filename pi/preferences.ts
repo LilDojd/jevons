@@ -4,27 +4,18 @@ import { join } from "node:path";
 import type { Policy } from "../src/contracts.ts";
 import { parsePolicy, readSettingsFile } from "./policy.ts";
 
-export type Preferences = Omit<Policy, "checks" | "profiles" | "review"> & {
-	review: Omit<Policy["review"], "rules">;
-};
+export type Preferences = Omit<Policy, "checks" | "profiles">;
 
 export function preferencesOf(policy: Policy): Preferences {
-	const { checks: _checks, profiles: _profiles, review, ...preferences } = structuredClone(policy);
-	const { rules: _rules, ...reviewPreferences } = review;
-	return { ...preferences, review: reviewPreferences };
+	const { checks: _checks, profiles: _profiles, ...preferences } = structuredClone(policy);
+	return preferences;
 }
 
 export function parsePreferences(input: unknown): Preferences {
 	if (input && typeof input === "object") {
 		const raw = input as Record<string, unknown>;
-		if (
-			Object.hasOwn(raw, "checks") ||
-			Object.hasOwn(raw, "profiles") ||
-			(raw.review && typeof raw.review === "object" && Object.hasOwn(raw.review, "rules"))
-		)
-			throw new Error(
-				"Checks, profiles and review rules belong in project jevons.json, not user preferences.",
-			);
+		if (Object.hasOwn(raw, "checks") || Object.hasOwn(raw, "profiles"))
+			throw new Error("Checks and profiles belong in project jevons.json, not user preferences.");
 	}
 	return preferencesOf(parsePolicy(input));
 }
@@ -33,7 +24,6 @@ export function applyPreferences(project: Policy, preferences: Preferences): Pol
 	const policy = parsePolicy({
 		...project,
 		...preferences,
-		review: { ...preferences.review, rules: project.review.rules },
 	});
 	if (!preferences.writer) delete policy.writer;
 	return policy;

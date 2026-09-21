@@ -1,20 +1,15 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { Request } from "../src/contracts.ts";
-import type { DiffReport } from "../src/diff-review.ts";
-import { formatDiffReview, reviewDiff } from "../src/diff-review.ts";
 import type { AuthoredQuestions } from "./author.ts";
 import { authorQuestions } from "./author.ts";
 import { registerAutopilot } from "./autopilot.ts";
-import { collectLocalDiff, collectPullRequestDiff } from "./diff.ts";
-import { registerInvestigation } from "./investigation.ts";
 import type { DecisionDetails } from "./presentation.ts";
 import {
 	formatDecisionDetails,
 	formatEvaluation,
 	formatRestoredDetails,
-	formatReviewDetails,
 	registerPresentation,
 	safeText,
 } from "./presentation.ts";
@@ -30,7 +25,6 @@ export default function extension(pi: ExtensionAPI): void {
 	registerPresentation(pi);
 	registerAutopilot(pi, runtime);
 	registerRecovery(pi, runtime);
-	const investigate = registerInvestigation(pi, runtime);
 	const completedWriters = new Map<string, Omit<AuthoredQuestions, "questions">>();
 	pi.on("tool_result", (event) => {
 		if (event.toolName !== "jevons_decide") return;
@@ -43,7 +37,6 @@ export default function extension(pi: ExtensionAPI): void {
 		completedWriters.clear();
 		runtime.pause(ctx);
 		runtime.sessionId = ctx.sessionManager.getSessionId();
-		runtime.edits.clear();
 		runtime.restoreTask(ctx);
 		runtime.failures = 0;
 		runtime.jev = undefined;
@@ -61,70 +54,7 @@ export default function extension(pi: ExtensionAPI): void {
 	pi.on("session_tree", (_event, ctx) => {
 		runtime.pause(ctx);
 		runtime.policy = undefined;
-		runtime.edits.clear();
 		runtime.restoreTask(ctx);
-	});
-
-	const review = async (
-		ctx: ExtensionContext,
-		paths: string[],
-		signal?: AbortSignal,
-		url?: string,
-	) => {
-		const evaluate = runtime.evaluator(ctx, "Review");
-		const policy = runtime.policy;
-		if (!policy) throw new Error("Jev policy unavailable.");
-		const combined = AbortSignal.any([runtime.controller.signal, ...(signal ? [signal] : [])]);
-		const selected = paths;
-		const collect = () =>
-			url !== undefined
-				? collectPullRequestDiff(url, combined)
-				: collectLocalDiff(ctx.cwd, selected, combined);
-		const snapshot = await collect();
-		const report = await reviewDiff(snapshot, policy.review, evaluate, combined);
-		combined.throwIfAborted();
-		try {
-			if ((await collect()).fingerprint !== snapshot.fingerprint) throw new Error("Changed diff");
-		} catch {
-			report.complete = false;
-			report.status = "review";
-			report.omitted.push(
-				"The diff changed or could not be rechecked. Review the current changes.",
-			);
-		}
-		combined.throwIfAborted();
-		if (report.complete && url === undefined) {
-			if (!selected.length) runtime.edits.clear();
-			else for (const path of selected) runtime.edits.delete(path);
-		}
-		return report;
-	};
-
-	let reviewing = false;
-	pi.on("agent_settled", async (_event, ctx) => {
-		if (!runtime.active || !runtime.policy?.review.automatic || !runtime.edits.size || reviewing)
-			return;
-		reviewing = true;
-		try {
-			const paths = [...runtime.edits];
-			const report = await review(ctx, paths);
-			pi.sendMessage(
-				{
-					customType: "jevons",
-					content: formatDiffReview(report),
-					display: true,
-					details: report,
-				},
-				{ triggerTurn: false },
-			);
-			await investigate(report, ctx, () =>
-				collectLocalDiff(ctx.cwd, paths, runtime.controller.signal),
-			);
-		} catch (error) {
-			if (runtime.active && ctx.hasUI) ctx.ui.notify(safeText(String(error)), "warning");
-		} finally {
-			reviewing = false;
-		}
 	});
 
 	pi.registerTool({
@@ -227,62 +157,15 @@ export default function extension(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerTool({
-		name: "jevons_review",
-		label: "Review changes",
-		description:
-			"Review local diffs or a GitHub PR URL against quality rules. Large diffs are split and batched; every changed chunk and rule is tracked. PR diffs use pinned revisions. No code execution or posted comments. Partial coverage stays visible.",
-		promptSnippet: "Review changed code using Jev quality rules",
-		promptGuidelines: [
-			"Use jevons_review before finishing code changes. Supply paths for shell or external edits.",
-		],
-		parameters: Type.Object(
-			{
-				paths: Type.Optional(
-					Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), {
-						maxItems: 40,
-					}),
-				),
-				url: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
-			},
-			{ additionalProperties: false },
-		),
-		async execute(_id, params, signal, _update, ctx) {
-			if (params.url !== undefined && params.paths !== undefined)
-				throw new Error("Supply paths or a PR URL, not both.");
-			const report = await review(ctx, params.paths ?? [], signal, params.url);
-			return {
-				content: [{ type: "text", text: formatDiffReview(report) }],
-				details: report,
-			};
-		},
-		renderResult(result, { expanded }) {
-			return new Text(
-				formatRestoredDetails(() =>
-					safeText(
-						expanded && result.details
-							? formatReviewDetails(result.details as DiffReport)
-							: result.content
-									.filter((part) => part.type === "text")
-									.map((part) => part.text)
-									.join("\n"),
-					),
-				),
-				0,
-				0,
-			);
-		},
-	});
-
 	const show = (text: string, details?: unknown) =>
 		pi.sendMessage(
 			{ customType: "jevons", content: safeText(text), display: true, details },
 			{ triggerTurn: false },
 		);
 	pi.registerCommand("jevons", {
-		description: "Jevons: settings, enable, pause, ask, review, gates, usage and activity",
+		description: "Jevons: settings, enable, pause, ask, gates, usage and activity",
 		getArgumentCompletions: (prefix) =>
-			["on", "pause", "ask", "review", "gate", "usage", "activity", "settings"]
+			["on", "pause", "ask", "gate", "usage", "activity", "settings"]
 				.filter((value) => value.startsWith(prefix))
 				.map((value) => ({ value, label: value })),
 		async handler(raw, ctx) {
@@ -290,7 +173,7 @@ export default function extension(pi: ExtensionAPI): void {
 			try {
 				if (!action) {
 					if (!ctx.hasUI) {
-						show("/jevons on | pause | ask PROMPT | review | gate | usage | activity | settings");
+						show("/jevons on | pause | ask PROMPT | gate | usage | activity | settings");
 						return;
 					}
 					const choices = [
@@ -298,8 +181,7 @@ export default function extension(pi: ExtensionAPI): void {
 							? "pause — Stop sharing and automation"
 							: "on — Enable sharing and automation",
 						"ask — Ask a focused question with explicit context",
-						"review — Review changed code. This never approves merging.",
-						"gate — Select checks. Confirm execution before review.",
+						"gate — Select checks and confirm execution.",
 						"usage — Session token totals. No spending caps.",
 						"activity — Recent requests, models and token usage",
 						"settings — Edit user settings",
@@ -397,34 +279,12 @@ export default function extension(pi: ExtensionAPI): void {
 					});
 					return;
 				}
-				if (action === "review" || action === "gate") {
-					runtime.evaluator(ctx, "Review");
-					const lifetime = runtime.controller.signal;
-					if (args[0]?.startsWith("https://")) {
-						if (action === "gate" || args.length !== 1)
-							throw new Error("Use /jevons review GITHUB_PR_URL. Remote code is never executed.");
-						if (
-							!ctx.hasUI ||
-							!(await ctx.ui.confirm(
-								"Review GitHub pull request?",
-								"Jevons fetches a pinned diff through gh. It sends changed chunks to TypeSafe. No checkout, code execution or posted comments.",
-								{ signal: lifetime },
-							))
-						)
-							return;
-						const report = await review(ctx, [], lifetime, args[0]);
-						show(formatDiffReview(report), report);
-						return;
-					}
-					if (action === "gate") {
-						const verification = await verifyConfigured(ctx, runtime);
-						if (!verification) return;
-						pi.appendEntry("jevons.checks", verification);
-						show(formatVerification(verification), verification);
-						if (verification.status !== "passed" || !runtime.active) return;
-					}
-					const report = await review(ctx, args, lifetime);
-					show(formatDiffReview(report), report);
+				if (action === "gate") {
+					if (args.length) throw new Error("Use /jevons gate without arguments.");
+					const verification = await verifyConfigured(ctx, runtime);
+					if (!verification) return;
+					pi.appendEntry("jevons.checks", verification);
+					show(formatVerification(verification), verification);
 					return;
 				}
 				throw new Error("Unknown command. Use /jevons.");

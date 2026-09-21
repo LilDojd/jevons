@@ -2,7 +2,7 @@
 	"name": "jevons",
 	"version": "0.4.0",
 	"private": true,
-	"description": "Context-aware autopilot and review for Pi",
+	"description": "Context-aware autopilot and verification for Pi",
 	"type": "module",
 	"keywords": [
 		"pi-package",
