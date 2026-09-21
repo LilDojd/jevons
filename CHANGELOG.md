@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/LilDojd/jevons/compare/v0.4.0...v0.5.0) (2026-09-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove semantic code review
+
+### Features
+
+* remove semantic code review ([3e256a5](https://github.com/LilDojd/jevons/commit/3e256a5b0d334fb18b41d7d8246d2b5d307bd70b))
+
 ## [0.4.0](https://github.com/LilDojd/jevons/compare/v0.3.0...v0.4.0) (2026-09-19)
 
 
